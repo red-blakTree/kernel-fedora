@@ -10,14 +10,15 @@ Copr 工程配置、验证流程与风险。落地文件见仓库根目录。
 
 **成功标准**（按顺序验证，全部可独立复核）：
 
-1. `rpmspec -P kernel-zen.spec` 宏展开无报错。
-2. Copr 首次构建成功，产出 `kernel-zen-7.2.4-zen2.fcXX.x86_64.rpm` 与
+1. ✅ **已达成**：Copr 构建（build 10975417）成功产出 SRPM 与 5 个子包，见第 11 节验证记录。
+   本地 `rpmspec -P` 按约定不做，等价检查由 Copr 的 SRPM 构建承担。
+2. ✅ **已达成**：产出 `kernel-zen-7.2.4-zen2.fc44.x86_64.rpm` 与
    `-core` / `-modules` / `-devel` / `-devel-matched` 子包。
-3. `rpm -qp --provides kernel-zen-core-*.rpm` 含 `kernel-core-uname-r = 7.2.4-zen2.fcXX.x86_64`，
-   且与构建日志里 `make kernelrelease` 的结果一致。
-4. 安装并重启后 `uname -r` 等于上述 `_kver`；`journalctl -k | head` 无模块签名/依赖类错误。
-5. `kernel-zen-devel-matched` 能支撑外部模块构建（akmods/dkms 实测通过）。
-6. 上游出新 tag 后，workflow 自动改 spec 宏 + `config` 并触发 Copr 构建。
+3. ✅ **已达成**：repodata 中 `kernel-zen-core` 提供 `kernel-core-uname-r = 7.2.4-zen2.fc44.x86_64`，
+   与 `_kver` 宏的推导一致。
+4. ⏳ **待真机验证**：安装并重启后 `uname -r` 等于上述 `_kver`；`journalctl -k | head` 无模块签名/依赖类错误。
+5. ⏳ **待真机验证**：`kernel-zen-devel-matched` 能支撑外部模块构建（akmods/dkms 实测通过）。
+6. ⏳ **待配置验证**：上游出新 tag 后 workflow 自动改 spec 宏 + `config` 并触发构建（需先配 `COPR_CLI_CONFIG`）。
 
 **明确的非目标**：Secure Boot 签名、`kernel-headers`、`kernel-debuginfo`、LTO/clang 变体、
 RT/lqx 变体、多架构。
@@ -117,13 +118,35 @@ Release:        zen%{_zenrel}%{?dist}                        # zen2.fc44
 `%prep` 末尾的 `diff -u config .config` 会把每次 `olddefconfig` 的实际改动打进构建日志，
 内核升版本时这是最省事的 review 入口。
 
-### 5.4 Rust 开关
+### 5.4 Rust（已开启）
 
-Arch config `CONFIG_RUST=y`，且是在 rustc 1.98 / LLVM 22 下生成的。Fedora chroot 的
-rustc 未必满足内核 `scripts/min-tool-version.sh` 的最低版本要求，失败点又偏晚，
-因此第一版**默认关闭**（`%global _build_rust 0`，在 `%prep` 里 `scripts/config -d RUST`）。
-要启用：把宏改成 1（会带上 `BuildRequires: rust rust-src bindgen`），并先在目标 chroot 里
-实测 `make LLVM=1 rustavailable`。代价是失去 Rust 驱动（如 nova）。
+Arch config 是 `CONFIG_RUST=y`，而内核 `scripts/min-tool-version.sh`（v7.2.4-zen2）要求
+**rustc ≥ 1.85.0、bindgen ≥ 0.71.1**；Fedora 44 与 rawhide 提供的是 **rustc 1.98.1 / bindgen 0.72.1**，
+两个 chroot 都满足，因此 `%global _build_rust 1`，BuildRequires 用 Fedora kernel.spec 的同款写法
+（`rust` / `rust-src` / `bindgen`）。要关掉就把宏改回 0（`%prep` 会自动 `scripts/config -d RUST`）。
+
+### 5.5 条件式内核签名（有 akmods 密钥才签）
+
+`%install` 里检测构建环境是否存在 `kmodgenca` 生成的密钥对：
+
+```
+/etc/pki/akmods/certs/public_key.der      # 证书（DER）
+/etc/pki/akmods/private/private_key.priv  # 私钥（PEM）
+```
+
+两个都在就用 `sbsign` 签 `vmlinuz`（配合已导入 MOK 的同一密钥即可在 Secure Boot 下启动），
+否则打印 `skipping kernel signing` 后继续构建。
+
+**注意**：这两个文件位于**构建机**的 `/etc/pki/akmods`，COPR 的构建沙箱里没有，所以 COPR 产物
+仍是未签名内核；该分支真正生效的场景是本地 mock 构建。树内模块由内核自己的 `MODULE_SIG_ALL`
+签名，无需重复处理。
+
+### 5.6 为什么不出 `kernel-headers`
+
+Fedora 官方 `kernel-headers`（glibc 用的用户空间 ABI 基线）已占用 `/usr/include/linux`、
+`/usr/include/asm` 等路径，我们的包再装同一批文件会与它冲突（dnf 报 file conflict，二者只能装一个）；
+替换 Fedora 的 headers 又会影响 glibc 等用户空间构建，收益不成比例。外部模块编译用
+`kernel-zen-devel` 即可，因此不产出 headers 子包。
 
 ## 6. Copr 工程配置
 
@@ -201,3 +224,44 @@ copr-cli --config ~/.config/copr buildscm \
 - `mycopr/packages/kernel-zen/`（草稿 spec + Arch config，未提交）已被本仓库取代，
   建议删除以免两处漂移；`kernel-zen.config` 的内容与 `zen-kernel-fedora/config` 完全一致，
   没有保留价值。
+
+## 11. 验证记录
+
+### 首轮构建：Copr build 10975417（成功）
+
+- 触发方式（非 workflow，手工一次性）：
+
+  ```bash
+  copr-cli buildscm --nowait \
+    --clone-url https://github.com/red-blakTree/zen-kernel-fedora \
+    --commit 5a898f3 --spec kernel-zen.spec --type git --method rpkg \
+    binarytree/zen-kernel-fedora
+  ```
+
+- 构建页：https://copr.fedorainfracloud.org/coprs/build/10975417
+- chroot：`fedora-44-x86_64`（当时工程只开了这一个）
+- 耗时：**102.3 分钟**（提交到结束），落在第 6.1 节的 1–2 小时预期内
+- 产物（`results/binarytree/zen-kernel-fedora/fedora-44-x86_64/`）：
+  - `kernel-zen-7.2.4-zen2.fc44.x86_64.rpm`（元包）
+  - `kernel-zen-core-7.2.4-zen2.fc44.x86_64.rpm`
+  - `kernel-zen-modules-7.2.4-zen2.fc44.x86_64.rpm`
+  - `kernel-zen-devel-7.2.4-zen2.fc44.x86_64.rpm`
+  - `kernel-zen-devel-matched-7.2.4-zen2.fc44.x86_64.rpm`
+  - `kernel-zen-7.2.4-zen2.fc44.src.rpm`
+- repodata 里核到的 provide（akmods/dkms 的匹配依据，三处一致）：
+  `kernel-core-uname-r` = `kernel-modules-uname-r` = `kernel-devel-uname-r` = `7.2.4-zen2.fc44.x86_64`
+- 说明：这轮验证的是「spec + config + 上游 7.2.4-zen2 源码组合」能编过，也顺带确认了
+  `%prep` 里 `zstd -dc | patch -p1`、`olddefconfig`、`bpftool vmlinux.h`、`kernel-devel` 文件清单均无问题。
+
+### 下一步
+
+1. 加 rawhide 并在该 chroot 单独验证一次（`-r fedora-rawhide-x86_64`，避免顺带重编 fedora-44）：
+
+   ```bash
+   copr-cli modify zen-kernel-fedora --chroot fedora-rawhide-x86_64
+   ```
+
+2. 在 GitHub 仓库配置 secret `COPR_CLI_CONFIG`，让每日 workflow 闭环（第 6 节）。
+3. 安全：已经出现在聊天记录里的 API token 建议到 https://copr.fedorainfracloud.org/api/ 重新生成，
+   并同步更新 `~/.config/copr` 与 GitHub secret。
+4. 真机验证成功标准 4/5（重启后 `uname -r`、akmods/dkms 编外部模块）。

@@ -77,8 +77,13 @@ copr_url = https://copr.fedorainfracloud.org
 
 ## 已知限制
 
-- 内核未签名，不能配合 Secure Boot 使用（与 CachyOS、kernel-lqx 等 Copr 内核相同）。
-- 只有 x86_64；chroot 只有 Fedora 当前稳定版与 rawhide。
-- 不产出 `kernel-headers` 与 `kernel-debuginfo`（当前需求不需要）。
-- Rust for Linux 默认关闭（`%global _build_rust 0`），打开前需确认 chroot 内
-  rustc/bindgen 版本满足内核要求。
+- 内核默认未签名：只有构建环境里存在 `/etc/pki/akmods/certs/public_key.der` 与
+  `/etc/pki/akmods/private/private_key.priv` 时，才会用 `sbsign` 自动签名 vmlinuz。COPR 的构建
+  沙箱没有这两个文件（它们在你本机），所以 **COPR 产物仍是无签名内核，Secure Boot 需关闭**；
+  想要带签名的内核就用本地 mock 构建，并在构建前生成好 akmods 密钥。
+- chroot：`fedora-44-x86_64` + `fedora-rawhide-x86_64`；架构只有 x86_64。
+- 不产出 `kernel-headers`：Fedora 官方 `kernel-headers` 已经占用 `/usr/include/linux`、`/usr/include/asm`
+  等路径，再出一份会文件冲突（两个包只能装一个）；外部模块编译用 `kernel-zen-devel` 就够。
+  同样不产出 `kernel-debuginfo`。
+- Rust for Linux 默认开启（`%global _build_rust 1`）：内核要求 rustc ≥ 1.85.0、bindgen ≥ 0.71.1，
+  Fedora 44 与 rawhide 提供 rustc 1.98.1 / bindgen 0.72.1。
