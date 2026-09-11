@@ -1,0 +1,7 @@
+# 本地构建/试编产物
+*.src.rpm
+*.rpm
+*.tar.xz
+*.patch.zst
+*.log
+__pycache__/

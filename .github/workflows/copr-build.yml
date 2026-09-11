@@ -1,0 +1,79 @@
+name: Sync zen-kernel and build in Copr
+
+on:
+  schedule:
+    # 每天 03:17 UTC 检查上游是否有新的 zen 正式发布
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: 'Force build even if no update'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+env:
+  COPR_PROJECT: binarytree/zen-kernel-fedora
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.diff.outputs.changed }}
+      sha: ${{ steps.commit.outputs.commit_hash || github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Sync upstream version and config
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/sync_upstream.py
+
+      - name: Detect changes
+        id: diff
+        run: |
+          if git diff --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Already up to date."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git diff --stat
+          fi
+
+      - name: Commit changes
+        id: commit
+        if: steps.diff.outputs.changed == 'true'
+        uses: stefanzweifel/git-auto-commit-action@v7
+        with:
+          commit_message: "chore: sync zen-kernel upstream [skip ci]"
+
+  build:
+    needs: sync
+    # 有更新，或手动触发了强制构建时才提交
+    if: |
+      needs.sync.result == 'success' &&
+      (needs.sync.outputs.changed == 'true' || github.event.inputs.force_build == 'true')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.sync.outputs.sha }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+
+      - name: Trigger Copr build
+        env:
+          COPR_CLI_CONFIG: ${{ secrets.COPR_CLI_CONFIG }}
+          COMMIT: ${{ needs.sync.outputs.sha }}
+        run: |
+          uvx copr-cli --config <(echo "${COPR_CLI_CONFIG}") buildscm \
+            --clone-url "https://github.com/${{ github.repository }}" \
+            --commit "${COMMIT}" \
+            --spec "kernel-zen.spec" \
+            --type git \
+            --method rpkg \
+            "${COPR_PROJECT}"
