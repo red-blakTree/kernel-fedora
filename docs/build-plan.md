@@ -72,6 +72,8 @@ Release:        zen%{_zenrel}%{?dist}                        # zen2.fc44
 - **不需要构建计数器**：上游 tag 变了，`Version`（内核升版）或 `Release`（zen 序号 2→3）必然变，
   NEVRA 天然唯一（`zen%{_zenrel}` 就是这个作用）。
 - `%{?dist}` 让 fc44 与 rawhide 的 `_kver` 不同，两个 chroot 的产物不会互相覆盖。
+- `kernel-power` 用同一套宏推导，只把 `Release` 前缀换成 `power%{_zenrel}`，于是
+  `uname -r` 是 `7.2.4-power2.fc44.x86_64`，与 zen 包不同名、可以并存（见第 12 节）。
 
 ## 5. spec 要点
 
@@ -265,3 +267,38 @@ copr-cli --config ~/.config/copr buildscm \
 3. 安全：已经出现在聊天记录里的 API token 建议到 https://copr.fedorainfracloud.org/api/ 重新生成，
    并同步更新 `~/.config/copr` 与 GitHub secret。
 4. 真机验证成功标准 4/5（重启后 `uname -r`、akmods/dkms 编外部模块）。
+
+## 12. kernel-power（省电向，第二个包）
+
+同一个仓库、同一份上游（zen tag）、同一份 `config`，只多一个 spec：`kernel-power.spec`。
+Copr 工程单独一个：`binarytree/linux-power`（chroots 与 zen 相同：fedora-44 + rawhide）。
+workflow 改成矩阵，一次同步同时投两个工程。
+
+### 12.1 与 linux-zen 的差异（全部经核实，不是照搬传说）
+
+改动都写在 spec 的 `%prep` 里，且每个符号都确认过在**本内核 config 中确实存在**
+（`scripts/config` 写不存在的符号会静默失效，第 5.2 节的 `X86_64_VERSION` 就是教训）：
+
+| 项 | linux-zen | kernel-power | 依据 |
+| --- | --- | --- | --- |
+| `CONFIG_HZ` | 1000 | **250**（`%global _hz_tick`） | 时钟中断更少；choice 成员 `HZ_100/250/300/1000` 在 config 中都在 |
+| 抢占模型 | `CONFIG_PREEMPT=y`（full） | **`CONFIG_PREEMPT_VOLUNTARY=y`** | 读 v7.2.4-zen2 的 `kernel/sched/core.c`：`preempt_dynamic_init()` 按 `PREEMPT_NONE/VOLUNTARY/LAZY` 决定启动默认值，`PREEMPT_DYNAMIC=y` 下依然生效，`preempt=` 可覆盖 |
+| `CONFIG_PCIEASPM_*` | `PCIEASPM_DEFAULT`（BIOS） | **`PCIEASPM_POWERSAVE`** | 四个成员符号在 config 中齐备；启动参数 `pcie_aspm=default` 可还原 |
+
+### 12.2 zen 本来就省电的部分（没有重复设置）
+
+`RCU_LAZY`、`RCU_NOCB_CPU`、`WQ_POWER_EFFICIENT_DEFAULT`、`SATA_MOBILE_LPM_POLICY=3`、
+`SND_HDA_POWER_SAVE_DEFAULT=10`、`USB_AUTOSUSPEND_DELAY=2`、`CPU_FREQ_DEFAULT_GOV_SCHEDUTIL`、
+`CPU_IDLE_GOV_TEO`、`ENERGY_MODEL`、`LRU_GEN`、`ACPI_CPPC_LIB`、`INTEL_IDLE`、`X86_INTEL_PSTATE`/`X86_AMD_PSTATE`
+——这些在 Arch 的 linux-zen config 里已是省电向取值，power 版因此不动它们。
+
+### 12.3 命名与并存
+
+`Release: power%{_zenrel}` ⇒ `_kver = 7.2.4-power2.fc44.x86_64`，与 `kernel-zen` 的
+`7.2.4-zen2.fc44.x86_64` 不同名，`/lib/modules/<kver>` 不冲突，两个内核可以同时装、用 grub 选。
+
+### 12.4 诚实的边界
+
+内核配置只是耗电的一环：笔电上 S0ix/固件、`TLP`/`powertop`、屏幕与 WiFi 省电策略、
+`intel_pstate`/`amd_pstate` 的 governor 参数影响通常更大。本包只保证「内核这一层是省电取向」，
+不承诺具体续航数字；要量化，就在同一台机器上用 `powertop`/`turbostat` 对比 zen 与 power 两个内核。

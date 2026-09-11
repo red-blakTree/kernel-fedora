@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""检测 zen-kernel 最新正式版本，更新 kernel-zen.spec 的版本宏与 config。
+"""检测 zen-kernel 最新正式版本，更新 kernel-zen.spec / kernel-power.spec 的版本宏与 config。
 
 - 只认 tag 形如 v7.2.4-zen2 且带 linux-<tag>.patch.zst 附件的正式发布，
   lqx 系列（v7.2.4-lqx4）会被忽略。
@@ -22,7 +22,10 @@ import urllib.request
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SPEC = REPO_ROOT / "kernel-zen.spec"
+SPECS = [
+    REPO_ROOT / "kernel-zen.spec",
+    REPO_ROOT / "kernel-power.spec",
+]
 CONFIG = REPO_ROOT / "config"
 
 RELEASES_URL = "https://api.github.com/repos/zen-kernel/zen-kernel/releases?per_page=30"
@@ -60,11 +63,11 @@ def latest_zen_release() -> tuple[str, dict[str, str]]:
     raise RuntimeError("未找到带 linux-<tag>.patch.zst 附件的 zen 正式发布")
 
 
-def set_macro(text: str, name: str, value: str) -> str:
+def set_macro(text: str, name: str, value: str, spec_name: str) -> str:
     pattern = rf"(?m)^(%global\s+{re.escape(name)}\s+)\S+$"
     text, count = re.subn(pattern, rf"\g<1>{value}", text)
     if count != 1:
-        raise RuntimeError(f"{SPEC.name} 中应恰好有一处 '%global {name}'，实际 {count} 处")
+        raise RuntimeError(f"{spec_name} 中应恰好有一处 '%global {name}'，实际 {count} 处")
     return text
 
 
@@ -72,12 +75,13 @@ def main() -> int:
     tag, parts = latest_zen_release()
     version = f"{parts['major']}.{parts['minor']}.{parts['stable']}"
 
-    spec = SPEC.read_text(encoding="utf-8")
-    spec = set_macro(spec, "_majver", parts["major"])
-    spec = set_macro(spec, "_basekver", f"{parts['major']}.{parts['minor']}")
-    spec = set_macro(spec, "_stablekver", parts["stable"])
-    spec = set_macro(spec, "_zenrel", parts["zenrel"])
-    SPEC.write_text(spec, encoding="utf-8")
+    for spec_path in SPECS:
+        spec = spec_path.read_text(encoding="utf-8")
+        spec = set_macro(spec, "_majver", parts["major"], spec_path.name)
+        spec = set_macro(spec, "_basekver", f"{parts['major']}.{parts['minor']}", spec_path.name)
+        spec = set_macro(spec, "_stablekver", parts["stable"], spec_path.name)
+        spec = set_macro(spec, "_zenrel", parts["zenrel"], spec_path.name)
+        spec_path.write_text(spec, encoding="utf-8")
 
     # Arch 的 config 与内核版本可能短期错位，spec 里的 olddefconfig 会补齐；
     # 因此这里拿不到 config 只告警、不中断版本更新。

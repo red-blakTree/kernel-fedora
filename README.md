@@ -20,6 +20,29 @@ sudo dnf install kernel-zen
 
 升级后重启并选择 zen 内核；`uname -r` 形如 `7.2.4-zen2.fc44.x86_64`。
 
+## 省电内核 kernel-power
+
+同一仓库里还有一份省电向的包，上游与 kernel-zen 完全相同，只改内核配置：
+
+```bash
+sudo dnf copr enable binarytree/linux-power
+sudo dnf install kernel-power
+```
+
+`uname -r` 形如 `7.2.4-power2.fc44.x86_64`——与 zen 包的 `7.2.4-zen2.*` 不同名，**两个内核可以并存**。
+
+相对 linux-zen 的差异只有三处（都写在 spec 里，随时可改回）：
+
+| 项 | linux-zen | kernel-power | 想还原时 |
+| --- | --- | --- | --- |
+| 调度时钟 `_hz_tick` | 1000 Hz | **250 Hz** | 改 spec 顶部的 `%global _hz_tick` |
+| 抢占模型 | full | **voluntary** | 启动参数 `preempt=full`（也可 `lazy`） |
+| PCIe ASPM | BIOS 默认 | **powersave** | 启动参数 `pcie_aspm=default` |
+
+zen 配置里本来就省电的部分（`RCU_LAZY`、`WQ_POWER_EFFICIENT_DEFAULT`、`SATA_MOBILE_LPM_POLICY=3`、
+`SND_HDA_POWER_SAVE_DEFAULT=10`、`USB_AUTOSUSPEND_DELAY=2`、`schedutil`、`TEO`、MGLRU）已经开着，
+没有重复设置。笔电耗电的大头其实在用户空间（S0ix、TLP/powertop、固件），内核这三项只是其中一环。
+
 **Secure Boot 必须关闭**（内核未签名）。外部模块（akmods/dkms）需要
 `kernel-zen-devel`，它由 `kernel-zen-devel-matched` 元包带入。
 
