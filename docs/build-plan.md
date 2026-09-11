@@ -281,9 +281,10 @@ workflow 改成矩阵，一次同步同时投两个工程。
 
 | 项 | linux-zen | kernel-power | 依据 |
 | --- | --- | --- | --- |
-| `CONFIG_HZ` | 1000 | **250**（`%global _hz_tick`） | 时钟中断更少；choice 成员 `HZ_100/250/300/1000` 在 config 中都在 |
+| `CONFIG_HZ` | 1000 | **300**（`%global _hz_tick`） | 时钟中断更少；choice 成员 `HZ_100/250/300/1000` 在 config 中都在 |
 | 抢占模型 | `CONFIG_PREEMPT=y`（full） | **`CONFIG_PREEMPT_VOLUNTARY=y`** | 读 v7.2.4-zen2 的 `kernel/sched/core.c`：`preempt_dynamic_init()` 按 `PREEMPT_NONE/VOLUNTARY/LAZY` 决定启动默认值，`PREEMPT_DYNAMIC=y` 下依然生效，`preempt=` 可覆盖 |
-| `CONFIG_PCIEASPM_*` | `PCIEASPM_DEFAULT`（BIOS） | **`PCIEASPM_POWERSAVE`** | 四个成员符号在 config 中齐备；启动参数 `pcie_aspm=default` 可还原 |
+`CONFIG_PCIEASPM_*` **不动**，保持 BIOS 默认：powersave 能省一点电，但部分机型的 PCIe 链路会出
+兼容性问题（这也是它不作为内核默认值的原因）；需要时用启动参数 `pcie_aspm=powersave` 单独开。
 
 ### 12.2 zen 本来就省电的部分（没有重复设置）
 

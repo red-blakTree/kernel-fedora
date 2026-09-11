@@ -3,7 +3,7 @@
 # 上游源码      : https://github.com/zen-kernel/zen-kernel（与 kernel-zen 同一 tag）
 # 打包骨架参考  : copr-linux-cachyos/sources/kernel-cachyos-bore/kernel-cachyos.spec
 # 源码组合参考  : Arch Linux linux-zen (kernel.org 原版 tarball + zen 补丁 + Arch config)
-# 省电差异      : 见 docs/build-plan.md 第 12 节（HZ / 抢占模型 / PCIe ASPM）
+# 省电差异      : 见 docs/build-plan.md 第 12 节（HZ / 抢占模型）
 #
 # 版本宏 _majver/_basekver/_stablekver/_zenrel 由 scripts/sync_upstream.py 自动维护。
 
@@ -30,7 +30,7 @@
 %global _kver        %{_rpmver}.%{_arch}
 
 # 省电档：调度时钟频率，可选 100 / 250 / 300 / 1000（越低越省电、交互延迟越大）
-%global _hz_tick     250
+%global _hz_tick     300
 
 # Rust for Linux：内核 scripts/min-tool-version.sh 要求 rustc >= 1.85.0、bindgen >= 0.71.1；
 # Fedora 44 与 rawhide 提供 rustc 1.98.1 / bindgen 0.72.1，已满足，因此默认开启。
@@ -120,8 +120,8 @@ case %{_hz_tick} in
     100|250|300|1000)
         scripts/config -d HZ_1000 -e HZ_%{_hz_tick} --set-val HZ %{_hz_tick};;
     *)
-        echo "Invalid _hz_tick value, falling back to 250"
-        scripts/config -d HZ_1000 -e HZ_250 --set-val HZ 250;;
+        echo "Invalid _hz_tick value, falling back to 300"
+        scripts/config -d HZ_1000 -e HZ_300 --set-val HZ 300;;
 esac
 
 # 2) 抢占模型默认改为 voluntary（zen 原本是 full，抢占点更多）。
@@ -129,8 +129,8 @@ esac
 #    符号决定启动默认值，因此 preempt=full|lazy 启动参数可随时切回。
 scripts/config -d PREEMPT -e PREEMPT_VOLUNTARY
 
-# 3) PCIe ASPM 用 powersave 取代 BIOS 默认；启动参数 pcie_aspm=default 可还原
-scripts/config -d PCIEASPM_DEFAULT -e PCIEASPM_POWERSAVE
+# PCIe ASPM 特意保持 BIOS 默认（PCIEASPM_DEFAULT）：powersave 虽能省一点电，但部分机型
+# 的 PCIe 链路会出兼容性问题。需要时可加启动参数 pcie_aspm=powersave。
 
 %if ! %{_build_rust}
 # 见文件开头 _build_rust 说明
