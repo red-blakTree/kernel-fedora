@@ -41,6 +41,19 @@ sudo dnf install kernel-power
 `CONFIG_PCIEASPM_*` 特意**保持 BIOS 默认**：powersave 能省一点电，但部分机型的 PCIe 链路会出
 兼容性问题；需要时用启动参数 `pcie_aspm=powersave` 单独开即可。
 
+### 省电与流畅怎么调（不用重编）
+
+每一项的极端档都留了运行时开关，同一个包可以按场景切：
+
+| 想要 | 怎么做 |
+| --- | --- |
+| 更流畅（游戏 / 视频会议） | 内核参数加 `preempt=full` |
+| 默认（省电与流畅折中） | 不用做任何事：`HZ=300` + `PREEMPT_LAZY` + 保留 zen 的交互调优 |
+| 更省电（外出/续航） | 内核参数加 `preempt=none snd_hda_intel.power_save=1 pcie_aspm=powersave` |
+
+这些只影响运行时行为；改 `/etc/default/grub` 的 `GRUB_CMDLINE_LINUX` 后跑一次
+`grub2-mkconfig -o /boot/grub2/grub.cfg` 重启即可，换场景不用换内核。
+
 zen 配置里本来就省电的部分（`RCU_LAZY`、`WQ_POWER_EFFICIENT_DEFAULT`、`SATA_MOBILE_LPM_POLICY=3`、
 `SND_HDA_POWER_SAVE_DEFAULT=10`、`USB_AUTOSUSPEND_DELAY=2`、`schedutil`、`TEO`、MGLRU）已经开着，
 没有重复设置。笔电耗电的大头其实在用户空间（S0ix、TLP/powertop、固件），内核这两项只是其中一环。
