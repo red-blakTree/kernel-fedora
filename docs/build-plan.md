@@ -20,8 +20,8 @@ Copr 工程配置、验证流程与风险。落地文件见仓库根目录。
 5. ⏳ **待真机验证**：`kernel-zen-devel-matched` 能支撑外部模块构建（akmods/dkms 实测通过）。
 6. ⏳ **待配置验证**：上游出新 tag 后 workflow 自动改 spec 宏 + `config` 并触发构建（需先配 `COPR_CLI_CONFIG`）。
 
-**明确的非目标**：Secure Boot 签名、`kernel-headers`、`kernel-debuginfo`、LTO/clang 变体、
-RT/lqx 变体、多架构。
+**明确的非目标**：产出**已签名**的 RPM（签名改由安装时在本机用 akmods 密钥完成，见 5.5）、
+`kernel-headers`、`kernel-debuginfo`、LTO/clang 变体、RT/lqx 变体、多架构。
 
 ## 2. 参考实现的可用部分
 
@@ -127,21 +127,29 @@ Arch config 是 `CONFIG_RUST=y`，而内核 `scripts/min-tool-version.sh`（v7.2
 两个 chroot 都满足，因此 `%global _build_rust 1`，BuildRequires 用 Fedora kernel.spec 的同款写法
 （`rust` / `rust-src` / `bindgen`）。要关掉就把宏改回 0（`%prep` 会自动 `scripts/config -d RUST`）。
 
-### 5.5 条件式内核签名（有 akmods 密钥才签）
+### 5.5 内核签名：放在安装时做，不在构建里签
 
-`%install` 里检测构建环境是否存在 `kmodgenca` 生成的密钥对：
+私钥只在**你自己机器**的 `/etc/pki/akmods/private/private_key.priv`，构建环境（含 Copr 沙箱）里没有，
+因此 spec 里**没有**构建期签名；改为在 `%posttrans core` 里、`kernel-install` 之后执行：
 
-```
-/etc/pki/akmods/certs/public_key.der      # 证书（DER）
-/etc/pki/akmods/private/private_key.priv  # 私钥（PEM）
-```
+1. 选证书：优先 `/etc/pki/akmods/certs/public_key.pem`，找不到则用 `.../public_key.der`
+   （Fedora 的 `kmodgenca` 默认只生成 `.der`——读 `/usr/bin/kmodgenca` 确认过；两种格式 `sbsign` 都接受）。
+2. 证书与私钥都在、且 `sbsign` 可用时，对 `/boot/vmlinuz-<kver>`（grub 布局）或
+   `/boot/*/<kver>/linux`（BLS 布局）执行：
 
-两个都在就用 `sbsign` 签 `vmlinuz`（配合已导入 MOK 的同一密钥即可在 Secure Boot 下启动），
-否则打印 `skipping kernel signing` 后继续构建。
+   ```bash
+   sbsign --key /etc/pki/akmods/private/private_key.priv \
+          --cert /etc/pki/akmods/certs/public_key.pem \
+          --output <镜像>.signed <镜像>
+   mv <镜像>.signed <镜像>
+   ```
 
-**注意**：这两个文件位于**构建机**的 `/etc/pki/akmods`，COPR 的构建沙箱里没有，所以 COPR 产物
-仍是未签名内核；该分支真正生效的场景是本地 mock 构建。树内模块由内核自己的 `MODULE_SIG_ALL`
-签名，无需重复处理。
+3. 缺密钥或没装 `sbsign`（`sbsigntools`）时打印 `NOTE:`/`WARNING:` 后跳过，**不会让安装失败**。
+
+前提：公钥要先注册进 MOK（一次即可）：`sudo mokutil --import /etc/pki/akmods/certs/public_key.der`。
+如果密钥是在装完内核之后才生成的，按上面命令手动补签一次即可。
+
+树内模块仍由内核自己的 `MODULE_SIG_ALL`，用构建时生成的一次性密钥签名，与此无关。
 
 ### 5.6 为什么不出 `kernel-headers`
 
@@ -206,7 +214,7 @@ copr-cli --config ~/.config/copr buildscm \
 | 8.3 | 上游改 tag/资产命名，或只发 lqx | 同步脚本报错、构建不触发 | 脚本只认 `vX.Y.Z-zenN` 且必须带 `linux-<tag>.patch.zst`，找不到就**报错退出**（不会静默用旧版本） |
 | 8.4 | `DEBUG_INFO=y` 让构建逼近 5 小时上限或撑爆磁盘 | 构建超时 | 先看实测耗时；必要时关 `DEBUG_INFO`/`DEBUG_INFO_BTF` 并去掉 `bpftool vmlinux.h` 步骤，或把 `%make_build` 并行度调低换内存 |
 | 8.5 | Copr API/网络抖动 | 单次构建失败 | 手动 `force_build` 重跑；版本宏与 config 都已提交，重跑不需要改文件 |
-| 8.6 | 内核未签名 | Secure Boot 机器无法启动该内核 | 文档已注明；需要时走用户自签（`sbsign` + 自建 MOK），不在本方案范围 |
+| 8.6 | 安装时未签名（缺 akmods 密钥 / 缺 `sbsign` / 公钥未注册 MOK） | Secure Boot 机器无法启动该内核 | `%posttrans` 会打印 `NOTE:`；按 5.5 手动 `sbsign` 一次并把公钥 `mokutil --import` 进 MOK |
 | 8.7 | GitHub API 限流（未认证 60 次/小时） | 同步 job 失败 | 脚本支持 `GITHUB_TOKEN`（workflow 已注入 `secrets.GITHUB_TOKEN`） |
 
 **回退方式**：所有版本信息都在 git 里 —— `git revert` 同步提交即可回到上一个内核版本，

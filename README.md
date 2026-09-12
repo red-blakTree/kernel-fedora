@@ -58,7 +58,10 @@ zen 配置里本来就省电的部分（`RCU_LAZY`、`WQ_POWER_EFFICIENT_DEFAULT
 `SND_HDA_POWER_SAVE_DEFAULT=10`、`USB_AUTOSUSPEND_DELAY=2`、`schedutil`、`TEO`、MGLRU）已经开着，
 没有重复设置。笔电耗电的大头其实在用户空间（S0ix、TLP/powertop、固件），内核这两项只是其中一环。
 
-**Secure Boot 必须关闭**（内核未签名）。外部模块（akmods/dkms）需要
+内核镜像的签名在**安装时**自动完成：本机有 `/etc/pki/akmods/private/private_key.priv` 与
+`/etc/pki/akmods/certs/public_key.pem`（Fedora 默认给的是 `.der`，也支持）且装了 `sbsigntools` 时，
+会给 `/boot/vmlinuz-<kver>` 签名（公钥需先 `mokutil --import` 注册进 MOK）。没签名时 Secure Boot 需关闭。
+外部模块（akmods/dkms）需要
 `kernel-zen-devel`，它由 `kernel-zen-devel-matched` 元包带入。
 
 ## 仓库结构
@@ -115,10 +118,19 @@ copr_url = https://copr.fedorainfracloud.org
 
 ## 已知限制
 
-- 内核默认未签名：只有构建环境里存在 `/etc/pki/akmods/certs/public_key.der` 与
-  `/etc/pki/akmods/private/private_key.priv` 时，才会用 `sbsign` 自动签名 vmlinuz。COPR 的构建
-  沙箱没有这两个文件（它们在你本机），所以 **COPR 产物仍是无签名内核，Secure Boot 需关闭**；
-  想要带签名的内核就用本地 mock 构建，并在构建前生成好 akmods 密钥。
+- 内核镜像的签名在**安装时**做（`%posttrans`），构建里不签（私钥不在构建环境里）：本机有
+  `/etc/pki/akmods/private/private_key.priv` 和 `/etc/pki/akmods/certs/public_key.pem`
+  （Fedora 的 `kmodgenca` 默认给 `.der`，同样支持）时，用 `sbsign` 签 `/boot/vmlinuz-<kver>`；
+  缺密钥或缺 `sbsign` 就打印 `NOTE:` 跳过。密钥是装完内核后才生成的，手动补一次即可：
+
+  ```bash
+  sudo sbsign --key /etc/pki/akmods/private/private_key.priv \
+              --cert /etc/pki/akmods/certs/public_key.pem \
+              --output /boot/vmlinuz-$(uname -r).signed /boot/vmlinuz-$(uname -r)
+  sudo mv /boot/vmlinuz-$(uname -r).signed /boot/vmlinuz-$(uname -r)
+  ```
+
+  公钥注册进 MOK（一次）：`sudo mokutil --import /etc/pki/akmods/certs/public_key.der`
 - chroot：`fedora-44-x86_64` + `fedora-rawhide-x86_64`；架构只有 x86_64。
 - 不产出 `kernel-headers`：Fedora 官方 `kernel-headers` 已经占用 `/usr/include/linux`、`/usr/include/asm`
   等路径，再出一份会文件冲突（两个包只能装一个）；外部模块编译用 `kernel-zen-devel` 就够。

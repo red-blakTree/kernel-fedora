@@ -37,10 +37,6 @@
 %define _kernel_dir /lib/modules/%{_kver}
 %define _devel_dir  %{_usrsrc}/kernels/%{_kver}
 
-# 条件式签名：构建环境里存在 Fedora akmods 密钥（kmodgenca 生成）时用它签 vmlinuz。
-%define _akmods_cert /etc/pki/akmods/certs/public_key.der
-%define _akmods_key  /etc/pki/akmods/private/private_key.priv
-
 Name:           kernel-zen
 Summary:        Linux ZEN kernel for Fedora
 Version:        %{_basekver}.%{_stablekver}
@@ -79,7 +75,6 @@ BuildRequires:  perl-interpreter
 BuildRequires:  python3-devel
 BuildRequires:  python3-pyyaml
 BuildRequires:  python-srpm-macros
-BuildRequires:  sbsigntools
 BuildRequires:  xz
 BuildRequires:  zstd
 %if %{_build_rust}
@@ -129,19 +124,6 @@ diff -u %{SOURCE2} .config || :
 %install
 echo "Installing the kernel image..."
 install -Dm644 "$(%make_build -s image_name)" "%{buildroot}%{_kernel_dir}/vmlinuz"
-
-# 有 akmods 密钥就签名（配合已导入 MOK 的同一密钥即可在 Secure Boot 下启动），
-# 否则跳过并明确提示。COPR 沙箱里没有这两个文件，属预期情况：密钥在你本机 /etc/pki/akmods 下。
-# 树内模块已由内核自己的 MODULE_SIG_ALL 签名，这里不重复处理。
-if [ -f %{_akmods_cert} ] && [ -f %{_akmods_key} ]; then
-    echo "Found akmods signing keys, signing vmlinuz..."
-    sbsign --key %{_akmods_key} --cert %{_akmods_cert} \
-        --output %{buildroot}%{_kernel_dir}/vmlinuz.signed \
-        %{buildroot}%{_kernel_dir}/vmlinuz
-    mv %{buildroot}%{_kernel_dir}/vmlinuz.signed %{buildroot}%{_kernel_dir}/vmlinuz
-else
-    echo "NOTE: %{_akmods_cert} / %{_akmods_key} not found, skipping kernel signing"
-fi
 zstd -19 -T0 < Module.symvers > %{buildroot}%{_kernel_dir}/symvers.zst
 
 echo "Installing kernel modules..."
@@ -288,6 +270,32 @@ if [ "$_ki_layout" = "ostree" ] || [ -d /run/systemd/system ]; then
             restorecon "/boot/symvers-%{_kver}.zst"
         fi
     fi
+fi
+
+# ---- 安装时在本机签名（构建环境里没有私钥，所以不在这里签）------------------
+# 证书优先用 public_key.pem（你指定的路径），Fedora 的 kmodgenca 默认生成的是 .der，故回退到它。
+_sb_cert=""
+for _cand in /etc/pki/akmods/certs/public_key.pem /etc/pki/akmods/certs/public_key.der; do
+    if [ -f "$_cand" ]; then _sb_cert="$_cand"; break; fi
+done
+if [ -n "$_sb_cert" ] && [ -f /etc/pki/akmods/private/private_key.priv ]; then
+    if command -v sbsign >/dev/null 2>&1; then
+        for _img in /boot/vmlinuz-%{_kver} /boot/*/%{_kver}/linux; do
+            [ -f "$_img" ] || continue
+            echo "Signing $_img with $_sb_cert"
+            if sbsign --key /etc/pki/akmods/private/private_key.priv --cert "$_sb_cert" \
+                      --output "${_img}.signed" "$_img"; then
+                mv "${_img}.signed" "$_img"
+            else
+                echo "WARNING: sbsign failed for $_img" >&2
+                rm -f "${_img}.signed"
+            fi
+        done
+    else
+        echo "NOTE: sbsign not found (dnf install sbsigntools), skipping kernel signing"
+    fi
+else
+    echo "NOTE: akmods signing keys not found, skipping kernel signing"
 fi
 
 %preun core
