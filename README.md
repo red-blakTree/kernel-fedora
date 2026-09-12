@@ -9,6 +9,12 @@
 Arch Linux 官方 `linux-zen` 一致：**kernel.org 原版源码 + zen 补丁 + Arch linux-zen config**，
 再在 `%prep` 里做 Fedora 适配（SELinux LSM、去掉硬编码主机名）。
 
+**Secure Boot**：内核签名在**安装时**由本机完成——本机有 akmods 密钥
+（`/etc/pki/akmods/private/private_key.priv` + `certs/public_key.pem`，Fedora 默认给 `.der`）
+且装了 `sbsigntools` 时，`%posttrans` 会自动 `sbsign` `/boot/vmlinuz-<kver>`；公钥需先
+`sudo mokutil --import /etc/pki/akmods/certs/public_key.der` 注册进 MOK。条件不满足时打印
+`NOTE:` 跳过，此时需关闭 Secure Boot。
+
 设计取舍、验证步骤与风险见 [docs/build-plan.md](docs/build-plan.md)。
 
 ## 安装
