@@ -282,7 +282,9 @@ workflow 改成矩阵，一次同步同时投两个工程。
 | 项 | linux-zen | kernel-power | 依据 |
 | --- | --- | --- | --- |
 | `CONFIG_HZ` | 1000 | **300**（`%global _hz_tick`） | 时钟中断更少；choice 成员 `HZ_100/250/300/1000` 在 config 中都在 |
-| 抢占模型 | `CONFIG_PREEMPT=y`（full） | **`CONFIG_PREEMPT_VOLUNTARY=y`** | 读 v7.2.4-zen2 的 `kernel/sched/core.c`：`preempt_dynamic_init()` 按 `PREEMPT_NONE/VOLUNTARY/LAZY` 决定启动默认值，`PREEMPT_DYNAMIC=y` 下依然生效，`preempt=` 可覆盖 |
+| 抢占模型 | `CONFIG_PREEMPT=y`（full） | **`CONFIG_PREEMPT_LAZY=y`** | upstream 原文：lazy「类似 full 抢占，但不过度抢占 SCHED_NORMAL 任务，从而拿回一部分 voluntary 的吞吐」= 平衡档；Fedora 同版本内核默认也是 lazy。运行时默认值由 `kernel/sched/core.c` 的 `preempt_dynamic_init()` 按 choice 符号决定，`preempt=` 可覆盖 |
+
+**踩坑记录（重要）**：第一版写成 `-d PREEMPT -e PREEMPT_VOLUNTARY`，构建日志的 `%prep` diff 显示**抢占没有任何变化**——x86 上 `CONFIG_PREEMPT_VOLUNTARY` 的 Kconfig 依赖是 `depends on !ARCH_HAS_PREEMPT_LAZY`，写进去会被 `olddefconfig` 丢弃（这正是第 5.2 节 `X86_64_VERSION` 那类静默失效）。现改为先 `sed` 删掉 `CONFIG_PREEMPT=` 行、再 `scripts/config -e PREEMPT_LAZY`。**判断某项配置是否真的生效，看构建日志里 `%prep` 打出的 `diff -u config .config`，不要只看 scripts/config 的命令行。**
 `CONFIG_PCIEASPM_*` **不动**，保持 BIOS 默认：powersave 能省一点电，但部分机型的 PCIe 链路会出
 兼容性问题（这也是它不作为内核默认值的原因）；需要时用启动参数 `pcie_aspm=powersave` 单独开。
 

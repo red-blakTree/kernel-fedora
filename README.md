@@ -36,7 +36,7 @@ sudo dnf install kernel-power
 | 项 | linux-zen | kernel-power | 想还原时 |
 | --- | --- | --- | --- |
 | 调度时钟 `_hz_tick` | 1000 Hz | **300 Hz** | 改 spec 顶部的 `%global _hz_tick` |
-| 抢占模型 | full | **voluntary** | 启动参数 `preempt=full`（也可 `lazy`） |
+| 抢占模型 | full | **lazy** | 启动参数 `preempt=full`（也可 `none`/`voluntary`） |
 
 `CONFIG_PCIEASPM_*` 特意**保持 BIOS 默认**：powersave 能省一点电，但部分机型的 PCIe 链路会出
 兼容性问题；需要时用启动参数 `pcie_aspm=powersave` 单独开即可。

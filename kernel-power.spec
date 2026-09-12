@@ -124,10 +124,14 @@ case %{_hz_tick} in
         scripts/config -d HZ_1000 -e HZ_300 --set-val HZ 300;;
 esac
 
-# 2) 抢占模型默认改为 voluntary（zen 原本是 full，抢占点更多）。
-#    PREEMPT_DYNAMIC 仍为 y，且 kernel/sched/core.c 的 preempt_dynamic_init() 以 choice
-#    符号决定启动默认值，因此 preempt=full|lazy 启动参数可随时切回。
-scripts/config -d PREEMPT -e PREEMPT_VOLUNTARY
+# 2) 抢占模型默认设为 LAZY：upstream 的说明是「类似 full 抢占，但不过度抢占 SCHED_NORMAL
+#    任务，从而拿回一部分 voluntary 带来的吞吐」——正是省电/性能的平衡点，Fedora 同版本
+#    内核的默认也是它。
+#    注意：x86 上 PREEMPT_VOLUNTARY 的 Kconfig 依赖是 !ARCH_HAS_PREEMPT_LAZY，写进去会被
+#    olddefconfig 丢掉（上一轮实测确认：diff 里完全没有抢占变更），所以这里先删掉 PREEMPT 行。
+#    PREEMPT_DYNAMIC 仍为 y，启动参数 preempt=none|voluntary|full 可随时切换。
+sed -i '/^CONFIG_PREEMPT=/d' .config
+scripts/config -e PREEMPT_LAZY
 
 # PCIe ASPM 特意保持 BIOS 默认（PCIEASPM_DEFAULT）：powersave 虽能省一点电，但部分机型
 # 的 PCIe 链路会出兼容性问题。需要时可加启动参数 pcie_aspm=powersave。
