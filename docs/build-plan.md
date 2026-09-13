@@ -213,7 +213,8 @@ copr-cli --config ~/.config/copr buildscm \
 
 > **工程改名（2026-09）**：Copr 不支持重命名工程（`copr-cli` 无 rename，`ProjectProxy` 也没有
 > rename 方法），所以 `zen-kernel-fedora` 与 `kernel-power-lto` 是按「新建 + 重建 + 待删旧」的方式
-> 改成 `linux-zen-fedora` 与 `linux-power-lto` 的，三个工程因此统一成 `linux-*` 前缀。
+> 改成 `linux-zen-fedora` 与 `linux-power-lto` 的（两个旧工程随后已删除），三个工程因此统一成
+> `linux-*` 前缀。
 > GitHub 仓库名（`red-blakTree/zen-kernel-fedora`）与本地目录名保持不变；第 11 节的历史记录
 > 保留旧名，其中的 URL 已失效。
 ### 6.1 资源预期（实测参照）
