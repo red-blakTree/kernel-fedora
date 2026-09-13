@@ -217,6 +217,10 @@ copr-cli --config ~/.config/copr buildscm \
 > `linux-*` 前缀。
 > GitHub 仓库名（`red-blakTree/zen-kernel-fedora`）与本地目录名保持不变；第 11 节的历史记录
 > 保留旧名，其中的 URL 已失效。
+
+> **工程 description / instructions 的格式（实测）**：Copr 用的是受限 Markdown——标题、
+> 列表、4 空格缩进代码块、行内代码、粗体、链接都能正常渲染，**唯独不支持表格**：
+> `| a | b |` 会连竖线一起原样显示在段落里。写描述一律用列表代替表格。
 ### 6.1 资源预期（实测参照）
 
 - 同类项目单 chroot 构建：`bieszczaders/kernel-cachyos` 一轮 6 个 chroot 约 120–128 分钟；
