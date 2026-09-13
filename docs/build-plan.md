@@ -1,63 +1,28 @@
-# 在 Copr 上编译 zen-kernel 的方案
+# zen-kernel-fedora 设计说明
 
-本文是 `zen-kernel-fedora` 仓库的设计说明：目标、参考实现分析、关键取舍、spec 逐段要点、
-Copr 工程配置、验证流程与风险。落地文件见仓库根目录。
+把上游 [zen-kernel](https://github.com/zen-kernel/zen-kernel) 打成 Fedora RPM，在三个 Copr 工程上构建。本文记录设计取舍、实现方式与踩过的坑；落地文件是 5 份 spec、`config`、`scripts/sync_upstream.py` 与 `.github/workflows/copr-build.yml`。
 
-## 1. 目标与成功标准
+## 1. 目标与现状
 
-**目标**：在 Copr 上持续产出可安装的 `kernel-zen` RPM（x86_64、Fedora 当前稳定版 + rawhide），
-上游 zen-kernel 发布新版本后能自动跟进。
+**目标**：持续产出可安装的 zen 内核，上游发新版后自动跟进；同一份上游派生基线 / 省电 / ISA 优化 / LTO 几种变体，彼此可共存。
 
-**成功标准**（按顺序验证，全部可独立复核）：
+| 包 | Copr 工程 | `uname -r` | chroot | 特点 |
+| --- | --- | --- | --- | --- |
+| `kernel-zen` | `binarytree/linux-zen-fedora` | `7.2.4-zen2.fc44.x86_64` | fedora-44 + rawhide | 基线 |
+| `kernel-zen-v3` | `binarytree/linux-zen-fedora` | `7.2.4-zen2.v3.fc44.x86_64` | fedora-44 + rawhide | + x86-64-v3 |
+| `kernel-power` | `binarytree/linux-power` | `7.2.4-power2.fc44.x86_64` | fedora-44 + rawhide | 省电档 |
+| `kernel-power-v3` | `binarytree/linux-power` | `7.2.4-power2.v3.fc44.x86_64` | fedora-44 + rawhide | 省电 + v3 |
+| `kernel-power-lto` | `binarytree/linux-power-lto` | `7.2.4-power2.lto.fc44.x86_64` | fedora-44 | 省电 + v3 + ThinLTO |
 
-1. ✅ **已达成**：Copr 构建（build 10975417）成功产出 SRPM 与 5 个子包，见第 11 节验证记录。
-   本地 `rpmspec -P` 按约定不做，等价检查由 Copr 的 SRPM 构建承担。
-2. ✅ **已达成**：产出 `kernel-zen-7.2.4-zen2.fc44.x86_64.rpm` 与
-   `-core` / `-modules` / `-devel` / `-devel-matched` 子包。
-3. ✅ **已达成**：repodata 中 `kernel-zen-core` 提供 `kernel-core-uname-r = 7.2.4-zen2.fc44.x86_64`，
-   与 `_kver` 宏的推导一致。
-4. ⏳ **待真机验证**：安装并重启后 `uname -r` 等于上述 `_kver`；`journalctl -k | head` 无模块签名/依赖类错误。
-5. ⏳ **待真机验证**：`kernel-zen-devel-matched` 能支撑外部模块构建（akmods/dkms 实测通过）。
-6. ⏳ **待配置验证**：上游出新 tag 后 workflow 自动改 spec 宏 + `config` 并触发构建（需先配 `COPR_CLI_CONFIG`）。
+每个包都产 `-core` / `-modules` / `-devel` / `-devel-matched` 子包。
 
-**明确的非目标**：产出**已签名**的 RPM（签名改由安装时在本机用 akmods 密钥完成，见 5.5）、
-`kernel-headers`、`kernel-debuginfo`、LTO/clang 变体、RT/lqx 变体、多架构。
+## 2. 上游与源码组合
 
-## 2. 参考实现的可用部分
+Source0 = kernel.org 原版 `linux-7.2.4.tar.xz`，Source1 = zen 的 `linux-v7.2.4-zen2.patch.zst`，Source2 = 仓库内的 `config`（Arch 官方 linux-zen 的 config，CI 刷新）；`%prep` 用 `zstd -dc %{SOURCE1} | patch -p1` 应用补丁。
 
-| 参考 | 提供什么 | 本方案怎么用 |
-| --- | --- | --- |
-| `mycopr` | 「CI 检测上游 → 改 spec `%global` → `copr-cli buildscm --type git --method rpkg`」整套流程；GitHub Actions 的 secret/提交方式 | 流程照搬，但**不**接入 `packages.toml`（原因见 2.1），改为独立仓库 + 专用脚本 |
-| `copr-linux-cachyos` | 已验证的 Fedora 内核打包骨架：脚本段（`%posttrans` 调 `kernel-install`）、`kernel-devel` 的完整文件清单、桩 initramfs、`_disable_source_fetch 0` | spec 骨架逐段沿用，只改与 zen 相关的部分（见 5.2 差异表） |
-| Arch `linux-zen` | 源码组合（kernel.org 原版 + zen 补丁 + Arch config）与版本命名（`7.2.4-zen2`） | Source0/Source1/Source2 与版本宏方案直接采用 |
+不采用 CachyOS 那种「GitHub tag 归档」作源码：与 Arch 官方 `linux-zen` 同源（kernel.org 原版 + zen 补丁 + Arch config）因而行为可对齐；zen 补丁只有 ~150KB，可人工审阅；GitHub 的动态 tag 归档不是稳定发布的固定文件。config 放仓库而不在构建时现拉，是为了可 review、可复现——构建结果不依赖 Arch main 分支当时的提交，只有内核升版对齐时才由 CI 刷新。
 
-### 2.1 为什么不走 mycopr 的 `packages.toml`
-
-`mycopr` 的 `transforms` 只支持 `dot` / `strip_v` / `strip:TEXT` 三种字符串操作，
-而内核需要一个 tag 拆成**四个**宏：
-
-```
-v7.2.4-zen2  ->  _majver=7, _basekver=7.2, _stablekver=4, _zenrel=2
-```
-
-要给内核加 transform 就得改 `mycopr/scripts/common.py` 这个所有包共用的核心，
-收益（省一个脚本）小于影响面。另外 `buildscm` 只能构建 mycopr 自身仓库里的 spec，
-把内核放进 `mycopr/packages/kernel-zen/` 会把 150MB 级源码构建和几十个轻量包混在同一仓库的
-CI 里。因此：**独立仓库 + 独立同步脚本**。
-
-## 3. 仓库结构
-
-```
-zen-kernel-fedora/
-├── kernel-zen.spec                  # 唯一 spec
-├── config                           # 内核 config 基线（Arch linux-zen，脚本自动刷新）
-├── scripts/sync_upstream.py         # 上游检测：改 spec 宏 + 刷 config
-├── .github/workflows/copr-build.yml # 每天同步；有更新则提交并触发 Copr
-├── docs/build-plan.md               # 本文
-└── README.md
-```
-
-## 4. 版本与命名
+## 3. 命名与并存
 
 ```spec
 %global _tag    v%{_basekver}.%{_stablekver}-zen%{_zenrel}   # v7.2.4-zen2
@@ -66,435 +31,177 @@ Release:        zen%{_zenrel}%{?dist}                        # zen2.fc44
 %global _kver   %{version}-%{release}.%{_arch}               # 7.2.4-zen2.fc44.x86_64
 ```
 
-- uname 里带 `%{?dist}` 和 `_arch`，与 CachyOS 的做法一致；`%build` 用
-  `make EXTRAVERSION=-%{release}.%{_arch}` 覆盖 zen 补丁在 `Makefile` 里设的 `EXTRAVERSION=-zen2`，
-  因此 `uname -r` 与 `_kver` 严格相等。
-- **不需要构建计数器**：上游 tag 变了，`Version`（内核升版）或 `Release`（zen 序号 2→3）必然变，
-  NEVRA 天然唯一（`zen%{_zenrel}` 就是这个作用）。
-- `%{?dist}` 让 fc44 与 rawhide 的 `_kver` 不同，两个 chroot 的产物不会互相覆盖。
-- `kernel-power` 用同一套宏推导，只把 `Release` 前缀换成 `power%{_zenrel}`，于是
-  `uname -r` 是 `7.2.4-power2.fc44.x86_64`，与 zen 包不同名、可以并存（见第 12 节）。
+变体只动 `Release` 前缀：baseline 是 `zen%{_zenrel}` / `power%{_zenrel}`，v3 追加 `.v3`，LTO 追加 `.lto`。
 
-## 5. spec 要点
+- `%build` 用 `make EXTRAVERSION=-%{release}.%{_arch}` 覆盖 zen 补丁在 `Makefile` 里设的 `EXTRAVERSION=-zen2`，因此 `uname -r` 与 `_kver` 严格相等。
+- **不需要构建计数器**：上游 tag 变了，`Version`（内核升版）或 `Release`（zen 序号）必然变，NEVRA 天然唯一。
+- 5 个 `_kver` 互不相同 ⇒ `/lib/modules/<kver>`、`/boot/vmlinuz-<kver>`、`kernel-*-uname-r` provide 都不冲突，可以同时安装；代价是 `/boot` 占用与构建量。`%{?dist}` 让 fc44 与 rawhide 的 `_kver` 也不同，两个 chroot 的产物不会互相覆盖。
 
-### 5.1 编译流程
+## 4. spec 要点
+
+### 4.1 流程
 
 ```
-%prep    linux-7.2.4 解包 → zstd -dc 解压 zen 补丁并 patch -p1 → 落 config
-         → Fedora 适配（DEFAULT_HOSTNAME / LSM / RUST）→ make olddefconfig → 打印 config 差异
-%build   make EXTRAVERSION=-%{release}.%{_arch} all
-         make -C tools/bpf/bpftool vmlinux.h feature-clang-bpf-co-re=1
+%prep    linux-7.2.4 解包 → zstd -dc 解压补丁并 patch -p1 → 落 config
+         → Fedora 适配（DEFAULT_HOSTNAME / LSM）→ 变体改动（v3 / LTO / 省电档）
+         → olddefconfig → diff -u config .config 打进构建日志
+%build   %make_build EXTRAVERSION=-%{release}.%{_arch} [KCFLAGS="…"] all
+         %make_build -C tools/bpf/bpftool vmlinux.h feature-clang-bpf-co-re=1
 %install vmlinuz + symvers.zst + modules_install(STRIP) + kernel-devel 文件清单
          + build/source 软链 + 桩 initramfs
 ```
 
-### 5.2 与参考实现的差异（含原因）
+### 4.2 与 CachyOS 参考的差异
 
-| 项 | CachyOS spec | 本方案 | 原因 |
+| 项 | CachyOS | 本仓库 | 原因 |
 | --- | --- | --- | --- |
-| 源码 | GitHub tag 归档 `CachyOS/linux` | kernel.org 原版 tarball + zen 补丁 | 与 Arch 官方 linux-zen 同源；补丁只有 150KB 且可人工审阅；kernel.org tarball 是稳定发布的固定文件，不依赖 GitHub 动态生成归档 |
-| 补丁应用 | `%autopatch`（普通 `.patch`） | `zstd -dc %{SOURCE1} \| patch -p1` | zen 补丁是 `.patch.zst`，显式解压避免依赖 rpmbuild 对压缩补丁的处理 |
-| config | 构建时从 linux-cachyos 仓库拉 | 仓库内 `config` + 由 CI 从 Arch 刷新 | 可 review、可复现（构建不依赖 Arch main 分支当时的提交） |
-| ISA 等级 | `scripts/config --set-val X86_64_VERSION` | 删除 | 实测该内核 config 里**不存在** `CONFIG_X86_64_VERSION`（`grep` 结果为 0 命中），原写法是无效设置。需要 ISA 优化时应在 `%build` 用 `KCFLAGS` 传 `-march=x86-64-v3`（已在第 13 节的 v3 包中落地） |
-| symvers 压缩 | `zstdmt -19` | `zstd -19 -T0` | 同一 `zstd` 包提供，避免依赖 `zstdmt` 这个兼容入口 |
-| 配置继承 | 自身 config + `CACHY`/`SCHED_BORE` switch | 无 | zen 补丁已包含其调度器改动，没有 `CACHY` 这类开关 |
-| Rust | 关闭 | 关闭，但做成 `_build_rust` 开关 | 见 5.4 |
-| 其他 | IMA/secure boot、nvidia-open、LTO、modprobed-db 最小化 | 未纳入 | 与当前目标无关；需要时按 CachyOS spec 对应分支再加 |
+| 源码 | GitHub tag 归档 | kernel.org tarball + zen 补丁 | 见第 2 节 |
+| 补丁应用 | `%autopatch` | `zstd -dc \| patch -p1` | zen 补丁是 `.patch.zst` |
+| config | 构建时从仓库拉 | 仓库内 + CI 刷新 | 可复现 |
+| ISA 等级 | `--set-val X86_64_VERSION` | `KCFLAGS=-march=x86-64-v3` | 见 5.1 |
+| symvers 压缩 | `zstdmt -19` | `zstd -19 -T0` | 少一个兼容入口 |
+| 配置继承 | `CACHY` / `SCHED_BORE` | 无 | zen 补丁已含其调度器改动 |
+| 包名 | `%{?_lto_args:-lto}` 动态 | 一变体一 spec、硬编码 | 见 5.2 |
+| IMA / nvidia-open / modprobed-db | 有 | 未纳入 | 见第 11 节 |
 
-> 附带修正：`mycopr/packages/kernel-zen/` 里那份草稿用 `%setup -n zen-kernel-%{_tag}`，
-> 而 GitHub tag 归档的顶层目录会去掉 `v` 前缀（`zen-kernel-7.2.4-zen2`），两者不匹配；
-> 本方案改用原版 tarball 后，`%setup -n linux-7.2.4` 没有这个歧义。
+### 4.3 Fedora 适配（在 Arch config 之上）
 
-### 5.3 Fedora 适配（在 Arch config 之上）
+| 项 | 处理 |
+| --- | --- |
+| `CONFIG_DEFAULT_HOSTNAME="archlinux"` | 取消设置 |
+| `CONFIG_LSM` 无 selinux | 加 `selinux`，顺序与 Fedora 官方一致 |
+| 模块压缩 `MODULE_COMPRESS_ZSTD=y` | 不用改，与 Fedora 一致 |
+| `MODULE_SIG_ALL=y` + 构建时一次性密钥 | 不用改；`MODULE_SIG_FORCE` 未开，akmods/dkms 的未签名模块照常加载 |
+| `DEBUG_INFO` + DWARF5 + BTF | 保留（BTF 是 `bpftool vmlinux.h` 与 BPF CO-RE 的前提），代价是构建更慢 |
 
-| 项 | Arch 原值 | Fedora 适配 |
-| --- | --- | --- |
-| `CONFIG_DEFAULT_HOSTNAME` | `"archlinux"` | 取消设置（回落到 `localhost`） |
-| `CONFIG_LSM` | `landlock,lockdown,yama,integrity,bpf` | 加 `selinux`，顺序与 Fedora 官方一致 |
-| `CONFIG_RUST` | `y` | 默认关（见 5.4） |
-| 模块压缩 | `CONFIG_MODULE_COMPRESS_ZSTD=y` | 不用改，与 Fedora 一致 |
-| 模块签名 | `MODULE_SIG_ALL=y`，`MODULE_SIG_KEY="certs/signing_key.pem"`，`MODULE_SIG_FORCE` 未开 | 不用改：构建时用 `openssl` 生成一次性密钥签名树内模块；因为 `MODULE_SIG_FORCE` 未开，akmods/dkms 的未签名模块照常加载 |
-| `SYSTEM_TRUSTED_KEYS` | 空 | 不用改，不会去找 Arch 的密钥文件 |
-| 调试信息 | `DEBUG_INFO=y` + DWARF5 + BTF | 保留（BTF 是 `bpftool vmlinux.h` 和 BPF CO-RE 的前提），代价是构建更慢；见风险 8.4 |
+### 4.4 Rust
 
-`%prep` 末尾的 `diff -u config .config` 会把每次 `olddefconfig` 的实际改动打进构建日志，
-内核升版本时这是最省事的 review 入口。
+Arch config 是 `CONFIG_RUST=y`；内核 `scripts/min-tool-version.sh` 要求 rustc ≥ 1.85.0、bindgen ≥ 0.71.1，而 Fedora 44 / rawhide 给的是 rustc 1.98.1 / bindgen 0.72.1，都满足，因此 **`_build_rust 1`（开启）**，BuildRequires 用 Fedora kernel.spec 的同款写法（`rust` / `rust-src` / `bindgen`）。改回 0 即关，`%prep` 会自动 `scripts/config -d RUST`。
 
-### 5.4 Rust（已开启）
+## 5. 变体实现
 
-Arch config 是 `CONFIG_RUST=y`，而内核 `scripts/min-tool-version.sh`（v7.2.4-zen2）要求
-**rustc ≥ 1.85.0、bindgen ≥ 0.71.1**；Fedora 44 与 rawhide 提供的是 **rustc 1.98.1 / bindgen 0.72.1**，
-两个 chroot 都满足，因此 `%global _build_rust 1`，BuildRequires 用 Fedora kernel.spec 的同款写法
-（`rust` / `rust-src` / `bindgen`）。要关掉就把宏改回 0（`%prep` 会自动 `scripts/config -d RUST`）。
-
-### 5.5 内核签名：放在安装时做，不在构建里签
-
-私钥只在**你自己机器**的 `/etc/pki/akmods/private/private_key.priv`，构建环境（含 Copr 沙箱）里没有，
-因此 spec 里**没有**构建期签名；改为在 `%posttrans core` 里、`kernel-install` 之后执行：
-
-1. 选证书：优先 `/etc/pki/akmods/certs/public_key.pem`，找不到则用 `.../public_key.der`
-   （Fedora 的 `kmodgenca` 默认只生成 `.der`——读 `/usr/bin/kmodgenca` 确认过；两种格式 `sbsign` 都接受）。
-2. 证书与私钥都在、且 `sbsign` 可用时，对 `/boot/vmlinuz-<kver>`（grub 布局）或
-   `/boot/*/<kver>/linux`（BLS 布局）执行：
-
-   ```bash
-   sbsign --key /etc/pki/akmods/private/private_key.priv \
-          --cert /etc/pki/akmods/certs/public_key.pem \
-          --output <镜像>.signed <镜像>
-   mv <镜像>.signed <镜像>
-   ```
-
-3. 缺密钥或没装 `sbsign`（`sbsigntools`）时打印 `NOTE:`/`WARNING:` 后跳过，**不会让安装失败**。
-
-前提：公钥要先注册进 MOK（一次即可）：`sudo mokutil --import /etc/pki/akmods/certs/public_key.der`。
-如果密钥是在装完内核之后才生成的，按上面命令手动补签一次即可。
-
-树内模块仍由内核自己的 `MODULE_SIG_ALL`，用构建时生成的一次性密钥签名，与此无关。
-
-### 5.6 为什么不出 `kernel-headers`
-
-Fedora 官方 `kernel-headers`（glibc 用的用户空间 ABI 基线）已占用 `/usr/include/linux`、
-`/usr/include/asm` 等路径，我们的包再装同一批文件会与它冲突（dnf 报 file conflict，二者只能装一个）；
-替换 Fedora 的 headers 又会影响 glibc 等用户空间构建，收益不成比例。外部模块编译用
-`kernel-zen-devel` 即可，因此不产出 headers 子包。
-
-## 6. Copr 工程配置
-
-```bash
-# 工程已建好：https://copr.fedorainfracloud.org/coprs/binarytree/linux-zen-fedora/
-# 当前设置与方案一致：
-#   chroots=fedora-44-x86_64, enable-net=on, follow-fedora-branching=off,
-#   module-hotfixes=off, multilib=off, appstream=off, auto-prune=on,
-#   isolation/bootstrap=default, delete-after-days=(空), repo-priority=(空)
-# 首轮构建跑通后再加 rawhide chroot：
-copr-cli modify zen-kernel-fedora --chroot fedora-rawhide-x86_64
-
-- chroot 数量按需增加；**每多一个 chroot 就多一份 1–2 小时的机器时间**。
-- `enable-net` 已开：源码（kernel.org tarball）在 rpkg 生成 SRPM 阶段下载。
-- GitHub 仓库 secret：`COPR_CLI_CONFIG`（`copr-cli` 配置文件的完整内容）。
-- 手动触发一次：
-
-```bash
-copr-cli --config ~/.config/copr buildscm \
-  --clone-url https://github.com/red-blakTree/zen-kernel-fedora \
-  --commit "$(git rev-parse HEAD)" \
-  --spec kernel-zen.spec --type git --method rpkg \
-  binarytree/linux-zen-fedora
-```
-
-> **容器内（distrobox）的坑**：容器里 IPv6 不通，而 Python 的 `getaddrinfo` 优先返回 AAAA，
-> 于是 `copr-cli` 的 API 调用会卡在 IPv6 连接上直到超时——`whoami` 偶尔能过，`list-packages` /
-> `buildscm` / `add-package-scm` 必挂，而且「无输出 + 退出码 0」看起来像成功，实则被 timeout 杀掉；
-> 同一个请求换成 `curl` 1 秒就返回（curl 带 Happy Eyeballs 会自动回退 IPv4）。绕法是让 Python
-> 只解析 IPv4，再直接用 python-copr 库：
->
-> ```python
-> import socket
-> _gai = socket.getaddrinfo
-> socket.getaddrinfo = lambda h, p, f=0, t=0, pr=0, fl=0: _gai(h, p, socket.AF_INET, t, pr, fl)
->
-> from copr.v3 import Client
-> client = Client.create_from_config_file()
-> # 建 SCM package
-> client.package_proxy.add("binarytree", "zen-kernel-fedora", "kernel-zen-v3", "scm", {
->     "clone_url": "https://github.com/red-blakTree/zen-kernel-fedora",
->     "committish": "<commit>", "spec": "kernel-zen-v3.spec",
->     "scm_type": "git", "source_build_method": "rpkg",
-> })
-> # 触发构建
-> client.build_proxy.create_from_scm(
->     "binarytree", "zen-kernel-fedora",
->     "https://github.com/red-blakTree/zen-kernel-fedora",
->     committish="<commit>", spec="kernel-zen-v3.spec",
->     scm_type="git", source_build_method="rpkg")
-> ```
->
-> 或者把这些命令放到宿主机上跑（宿主机没有这个 IPv6 问题）。
-
-> **工程改名（2026-09）**：Copr 不支持重命名工程（`copr-cli` 无 rename，`ProjectProxy` 也没有
-> rename 方法），所以 `zen-kernel-fedora` 与 `kernel-power-lto` 是按「新建 + 重建 + 待删旧」的方式
-> 改成 `linux-zen-fedora` 与 `linux-power-lto` 的（两个旧工程随后已删除），三个工程因此统一成
-> `linux-*` 前缀。
-> GitHub 仓库名（`red-blakTree/zen-kernel-fedora`）与本地目录名保持不变；第 11 节的历史记录
-> 保留旧名，其中的 URL 已失效。
-
-> **工程 description / instructions 的格式（实测）**：Copr 用的是受限 Markdown——标题、
-> 列表、4 空格缩进代码块、行内代码、粗体、链接都能正常渲染，**唯独不支持表格**：
-> `| a | b |` 会连竖线一起原样显示在段落里。写描述一律用列表代替表格。
-### 6.1 资源预期（实测参照）
-
-- 同类项目单 chroot 构建：`bieszczaders/kernel-cachyos` 一轮 6 个 chroot 约 120–128 分钟；
-  `jplie/kernel-lqx` 一轮 13 个 chroot 约 92 分钟。
-- Copr 单次构建上限约 5 小时（[copr-devel 讨论](https://lists.fedoraproject.org/archives/list/copr-devel@lists.fedorahosted.org/message/IULC7NUDBUU2XB4O7NH6UGQR6C5INSOB/)），
-  1–2 小时的量级有充足余量。
-
-## 7. 落地与验证步骤
-
-1. **本仓库自检**（已执行）：
-   - `python3 scripts/sync_upstream.py` 能解析出 `v7.2.4-zen2` 且不产生多余 diff；
-   - `config` 与 Arch 官方 `config.x86_64` 的 sha256 一致。
-2. **不本地跑构建**：本仓库文件尚未经过任何实际编译验证，**首个 Copr 构建就是第一次真实验证**。
-   失败时看构建页面的 `build.log` / `root.log` / `buildsrpm.log`，改完 spec 用
-   `force_build` 手动重跑即可（版本宏和 config 都已提交，重跑不需要改文件）。
-3. **Copr 首次构建**：按第 6 节创建工程并触发；重点盯 `%prep` 的 `diff -u config .config`
-   输出、zen 补丁是否干净应用（0 fuzz）、以及 `%build` 是否 OOM 或逼近 5 小时上限。
-4. **装机验证**：`dnf install ./kernel-zen-*.rpm` → 重启 → `uname -r` → `dkms/akmods` 编一个外部模块。
-5. **接入自动构建**：推送到 GitHub，配好 `COPR_CLI_CONFIG`，先手动 `force_build` 跑通一次全流程。
-
-> 仅在 Copr 上反复失败、需要缩小范围时，才考虑 `rpmspec -P kernel-zen.spec` 看宏展开或
-> 本地 mock 试编；正常情况下不必在本地跑内核构建。
-
-## 8. 风险与回退
-
-| # | 风险 | 影响 | 处理 |
-| --- | --- | --- | --- |
-| 8.1 | Arch config 与目标内核版本错位 | 新选项取默认值，可能不适合 Fedora | `olddefconfig` 兜底 + 构建日志里的 config diff 人工 review（每次内核升版本做一次） |
-| 8.2 | Fedora chroot 工具链不满足内核要求（pahole/BTF、rustc） | `%build` 失败 | BTF 是既有配置，若 `pahole` 太旧则升级 chroot 或临时关 `DEBUG_INFO_BTF`（同时删掉 `vmlinux.h` 那一步）；Rust 默认已关 |
-| 8.3 | 上游改 tag/资产命名，或只发 lqx | 同步脚本报错、构建不触发 | 脚本只认 `vX.Y.Z-zenN` 且必须带 `linux-<tag>.patch.zst`，找不到就**报错退出**（不会静默用旧版本） |
-| 8.4 | `DEBUG_INFO=y` 让构建逼近 5 小时上限或撑爆磁盘 | 构建超时 | 先看实测耗时；必要时关 `DEBUG_INFO`/`DEBUG_INFO_BTF` 并去掉 `bpftool vmlinux.h` 步骤，或把 `%make_build` 并行度调低换内存 |
-| 8.5 | Copr API/网络抖动 | 单次构建失败 | 手动 `force_build` 重跑；版本宏与 config 都已提交，重跑不需要改文件 |
-| 8.6 | 安装时未签名（缺 akmods 密钥 / 缺 `sbsign` / 公钥未注册 MOK） | Secure Boot 机器无法启动该内核 | `%posttrans` 会打印 `NOTE:`；按 5.5 手动 `sbsign` 一次并把公钥 `mokutil --import` 进 MOK |
-| 8.7 | GitHub API 限流（未认证 60 次/小时） | 同步 job 失败 | 脚本支持 `GITHUB_TOKEN`（workflow 已注入 `secrets.GITHUB_TOKEN`） |
-
-**回退方式**：所有版本信息都在 git 里 —— `git revert` 同步提交即可回到上一个内核版本，
-再手动触发一次构建；临时停自动化就把 workflow 里的 `schedule` 注释掉，改为手工执行
-`scripts/sync_upstream.py` + `copr-cli buildscm`。
-
-## 9. 后续可选项（本次不做）
-
-- `kernel-headers` 子包（需要 `%package headers` + `make headers_install` 的文件清单）。
-- clang/ThinLTO 变体（参照 `kernel-cachyos-lto.spec` 的 `_lto_args`）。
-- `_hz_tick`、`_x86_64_lvl` 这类可调宏：`_hz_tick` 已用于 kernel-power（12.1），x86-64 ISA 优化已独立成 v3 包（第 13 节）。
-- IMA/Secure Boot 相关 config（CachyOS 会打开 `CONFIG_IMA*`）。
-- nvidia-open 随内核一起构建。
-
-## 10. 待清理项
-
-- `mycopr/packages/kernel-zen/`（草稿 spec + Arch config，未提交）已被本仓库取代，
-  建议删除以免两处漂移；`kernel-zen.config` 的内容与 `zen-kernel-fedora/config` 完全一致，
-  没有保留价值。
-
-## 11. 验证记录
-
-### 首轮构建：Copr build 10975417（成功）
-
-- 触发方式（非 workflow，手工一次性）：
-
-  ```bash
-  copr-cli buildscm --nowait \
-    --clone-url https://github.com/red-blakTree/zen-kernel-fedora \
-    --commit 5a898f3 --spec kernel-zen.spec --type git --method rpkg \
-    binarytree/linux-zen-fedora
-  ```
-
-- 构建页：https://copr.fedorainfracloud.org/coprs/build/10975417
-- chroot：`fedora-44-x86_64`（当时工程只开了这一个）
-- 耗时：**102.3 分钟**（提交到结束），落在第 6.1 节的 1–2 小时预期内
-- 产物（`results/binarytree/linux-zen-fedora/fedora-44-x86_64/`）：
-  - `kernel-zen-7.2.4-zen2.fc44.x86_64.rpm`（元包）
-  - `kernel-zen-core-7.2.4-zen2.fc44.x86_64.rpm`
-  - `kernel-zen-modules-7.2.4-zen2.fc44.x86_64.rpm`
-  - `kernel-zen-devel-7.2.4-zen2.fc44.x86_64.rpm`
-  - `kernel-zen-devel-matched-7.2.4-zen2.fc44.x86_64.rpm`
-  - `kernel-zen-7.2.4-zen2.fc44.src.rpm`
-- repodata 里核到的 provide（akmods/dkms 的匹配依据，三处一致）：
-  `kernel-core-uname-r` = `kernel-modules-uname-r` = `kernel-devel-uname-r` = `7.2.4-zen2.fc44.x86_64`
-- 说明：这轮验证的是「spec + config + 上游 7.2.4-zen2 源码组合」能编过，也顺带确认了
-  `%prep` 里 `zstd -dc | patch -p1`、`olddefconfig`、`bpftool vmlinux.h`、`kernel-devel` 文件清单均无问题。
-
-### 下一步
-
-1. 加 rawhide 并在该 chroot 单独验证一次（`-r fedora-rawhide-x86_64`，避免顺带重编 fedora-44）：
-
-   ```bash
-   copr-cli modify zen-kernel-fedora --chroot fedora-rawhide-x86_64
-   ```
-
-2. 在 GitHub 仓库配置 secret `COPR_CLI_CONFIG`，让每日 workflow 闭环（第 6 节）。
-3. 安全：已经出现在聊天记录里的 API token 建议到 https://copr.fedorainfracloud.org/api/ 重新生成，
-   并同步更新 `~/.config/copr` 与 GitHub secret。
-4. 真机验证成功标准 4/5（重启后 `uname -r`、akmods/dkms 编外部模块）。
-
-## 12. kernel-power（省电向，第二个包）
-
-同一个仓库、同一份上游（zen tag）、同一份 `config`，只多一个 spec：`kernel-power.spec`。
-Copr 工程单独一个：`binarytree/linux-power`（chroots 与 zen 相同：fedora-44 + rawhide）。
-workflow 改成矩阵，一次同步同时投两个工程。
-
-### 12.1 与 linux-zen 的差异（全部经核实，不是照搬传说）
-
-改动都写在 spec 的 `%prep` 里，且每个符号都确认过在**本内核 config 中确实存在**
-（`scripts/config` 写不存在的符号会静默失效，第 5.2 节的 `X86_64_VERSION` 就是教训）：
-
-| 项 | linux-zen | kernel-power | 依据 |
-| --- | --- | --- | --- |
-| `CONFIG_HZ` | 1000 | **300**（`%global _hz_tick`） | 时钟中断更少；choice 成员 `HZ_100/250/300/1000` 在 config 中都在 |
-| 抢占模型 | `CONFIG_PREEMPT=y`（full） | **`CONFIG_PREEMPT_LAZY=y`** | upstream 原文：lazy「类似 full 抢占，但不过度抢占 SCHED_NORMAL 任务，从而拿回一部分 voluntary 的吞吐」= 平衡档；Fedora 同版本内核默认也是 lazy。运行时默认值由 `kernel/sched/core.c` 的 `preempt_dynamic_init()` 按 choice 符号决定，`preempt=` 可覆盖 |
-
-**踩坑记录（重要）**：第一版写成 `-d PREEMPT -e PREEMPT_VOLUNTARY`，构建日志的 `%prep` diff 显示**抢占没有任何变化**——x86 上 `CONFIG_PREEMPT_VOLUNTARY` 的 Kconfig 依赖是 `depends on !ARCH_HAS_PREEMPT_LAZY`，写进去会被 `olddefconfig` 丢弃（这正是第 5.2 节 `X86_64_VERSION` 那类静默失效）。现改为先 `sed` 删掉 `CONFIG_PREEMPT=` 行、再 `scripts/config -e PREEMPT_LAZY`。**判断某项配置是否真的生效，看构建日志里 `%prep` 打出的 `diff -u config .config`，不要只看 scripts/config 的命令行。**
-`CONFIG_PCIEASPM_*` **不动**，保持 BIOS 默认：powersave 能省一点电，但部分机型的 PCIe 链路会出
-兼容性问题（这也是它不作为内核默认值的原因）；需要时用启动参数 `pcie_aspm=powersave` 单独开。
-
-### 12.2 zen 本来就省电的部分（没有重复设置）
-
-`RCU_LAZY`、`RCU_NOCB_CPU`、`WQ_POWER_EFFICIENT_DEFAULT`、`SATA_MOBILE_LPM_POLICY=3`、
-`SND_HDA_POWER_SAVE_DEFAULT=10`、`USB_AUTOSUSPEND_DELAY=2`、`CPU_FREQ_DEFAULT_GOV_SCHEDUTIL`、
-`CPU_IDLE_GOV_TEO`、`ENERGY_MODEL`、`LRU_GEN`、`ACPI_CPPC_LIB`、`INTEL_IDLE`、`X86_INTEL_PSTATE`/`X86_AMD_PSTATE`
-——这些在 Arch 的 linux-zen config 里已是省电向取值，power 版因此不动它们。
-
-### 12.3 命名与并存
-
-`Release: power%{_zenrel}` ⇒ `_kver = 7.2.4-power2.fc44.x86_64`，与 `kernel-zen` 的
-`7.2.4-zen2.fc44.x86_64` 不同名，`/lib/modules/<kver>` 不冲突，两个内核可以同时装、用 grub 选。
-
-### 12.4 诚实的边界
-
-内核配置只是耗电的一环：笔电上 S0ix/固件、`TLP`/`powertop`、屏幕与 WiFi 省电策略、
-`intel_pstate`/`amd_pstate` 的 governor 参数影响通常更大。本包只保证「内核这一层是省电取向」，
-不承诺具体续航数字；要量化，就在同一台机器上用 `powertop`/`turbostat` 对比 zen 与 power 两个内核。
-
-## 13. v3 架构优化变体（kernel-zen-v3 / kernel-power-v3）
-
-第 9 节把 ISA 优化列为「本次不做」，这一节把它落地：baseline 之外再加两个包，内核用
-`-march=x86-64-v3` 编译。四个包互不冲突，可以同时安装。
-
-### 13.1 命名与并存
-
-| 包 | `Release` | `_kver` |
-| --- | --- | --- |
-| `kernel-zen` | `zen%{_zenrel}` | `7.2.4-zen2.fc44.x86_64` |
-| `kernel-zen-v3` | `zen%{_zenrel}.v3` | `7.2.4-zen2.v3.fc44.x86_64` |
-| `kernel-power` | `power%{_zenrel}` | `7.2.4-power2.fc44.x86_64` |
-| `kernel-power-v3` | `power%{_zenrel}.v3` | `7.2.4-power2.v3.fc44.x86_64` |
-
-`_kver` 不同 ⇒ `/lib/modules/<kver>`、`/boot/vmlinuz-<kver>`、`kernel-*-uname-r` provide 都不
-冲突。代价是构建量翻倍（4 包 × chroot），`/boot` 占用也翻倍。
-
-### 13.2 为什么不用 `CONFIG_X86_64_VERSION`（CachyOS 那条路走不通）
-
-CachyOS spec 写的是 `%define _x86_64_lvl 3` + `scripts/config --set-val X86_64_VERSION 3`，
-**照抄到 zen-kernel 上是静默 no-op**：`CONFIG_X86_64_VERSION` 不是 mainline 选项，而是
-[graysky2/kernel_compiler_patch](https://github.com/graysky2/kernel_compiler_patch) 往
-`arch/x86/Kconfig.cpu` 加的一个 Kconfig 项，外加 `arch/x86/Makefile` 里的
-`-march=x86-64-v$(CONFIG_X86_64_VERSION)`。CachyOS 的源码/补丁集里有这个 patch，zen-kernel
-没有，而 `scripts/config` 对不存在的符号是静默失效的 —— 正是 5.2 节 `X86_64_VERSION` 记的那个坑。
-
-本仓库改用 `KCFLAGS`（零外部补丁）：
+### 5.1 x86-64-v3（`kernel-zen-v3` / `kernel-power-v3` / `kernel-power-lto`）
 
 ```spec
 %global _x86_64_lvl  3
 %global _kcflags     -march=x86-64-v%{_x86_64_lvl}
-...
 %make_build EXTRAVERSION=-%{release}.%{_arch} KCFLAGS="%{_kcflags}" all
 ```
 
-顶层 `Makefile` 的 `KBUILD_CFLAGS += $(KCFLAGS)` 在 `include arch/x86/Makefile` 之后执行，
-注入点与 graysky patch 等价。**代价：它只出现在编译命令行里，`.config` diff 看不到**，所以
-5.3 节那套「看 config diff 判断是否生效」的验证对 v3 不适用，改看 13.4。
+**为什么不用 CachyOS 的 `CONFIG_X86_64_VERSION`**：它不是 mainline 选项，而是 [graysky2/kernel_compiler_patch](https://github.com/graysky2/kernel_compiler_patch) 往 `arch/x86/Kconfig.cpu` 加的 Kconfig 项，外加 `arch/x86/Makefile` 里的 `-march=x86-64-v$(CONFIG_X86_64_VERSION)`。CachyOS 的源码/补丁集带这个 patch，**zen-kernel 不带**，所以那行 `scripts/config` 在这里是静默 no-op（见 6.1）。`KCFLAGS` 的注入点与它等价：顶层 `Makefile` 的 `KBUILD_CFLAGS += $(KCFLAGS)` 在 `include arch/x86/Makefile` 之后执行。代价是它只出现在编译命令行、`.config` 里看不到，「看 config diff」那套判据对 v3 不适用（见第 9 节）。
 
-### 13.3 安全性：`-march` 不会让内核用上向量寄存器
+### 5.2 clang + ThinLTO（`kernel-power-lto`）
 
-`arch/x86/Makefile` 里有 `-mno-sse -mno-mmx -mno-sse2 -mno-3dnow -mno-avx -mno-sse4a`。
-在本容器实测（GCC 16.2.1）：
+与 CachyOS `kernel-cachyos-lto.spec` 逐项对齐：`%define make_build make %{?_lto_args} %{?_smp_mflags}`，参数 `CC=clang CXX=clang++ LD=ld.lld LLVM=1 LLVM_IAS=1`，Kconfig 用 `scripts/config -e LTO_CLANG_THIN`；`BuildRequires: clang`/`lld`/`llvm`（`gcc` 保留），devel 包 `Requires: clang`/`lld`/`llvm`（非 LTO 包则是 `gcc`）；`olddefconfig` 必须用 `%make_build`（见 6.2）。
 
-```
-$ gcc -mno-sse -mno-mmx -mno-sse2 -mno-3dnow -mno-avx -mno-sse4a -march=x86-64-v3 -Q --help=target
-  -msse [disabled]  -mavx [disabled]  -mavx2 [disabled]
-  -mbmi [enabled]   -mbmi2 [enabled]  -mmovbe [enabled]  -mpopcnt [enabled]
-```
+包名是有意不同的：CachyOS 靠 `_lto_args` 有没有定义动态改 `Name:`，一份 spec 兼产两种包；本仓库的 Copr 用 `buildscm --spec` 区分 package，其它变体也都是「一变体一 spec」，所以硬编码 `Name: kernel-power-lto`。
 
-显式的 `-mno-X` 优先于 `-march` 的默认值，与命令行顺序无关：v3 只带来 BMI1/BMI2/MOVBE/
-POPCNT/LZCNT 这类整数指令，内核仍不会生成 FP/SIMD 代码。mainline 的 `CONFIG_X86_NATIVE_CPU`
-也是在同一个位置追加 `-march=native`，机制相同。
+### 5.3 省电档（`kernel-power` / `-v3` / `-lto`）
 
-Rust 侧不跟着设 `KRUSTFLAGS`：`KBUILD_RUSTFLAGS` 本来就是 `-Ctarget-cpu=x86-64`，Rust 代码在
-内核里占比很小，暂时保持 baseline。
+相对 linux-zen 只改两处（都在 `%prep` 里，符号均核实存在于本内核 config）：
 
-### 13.4 验证
+- `CONFIG_HZ`：1000 → **300**（`%global _hz_tick`；choice 成员 `HZ_100/250/300/1000` 都在）；
+- 抢占模型：`CONFIG_PREEMPT=y`（full）→ **`CONFIG_PREEMPT_LAZY=y`**。upstream 原文是「类似 full 抢占，但不过度抢占 SCHED_NORMAL 任务，从而拿回一部分 voluntary 的吞吐」，正是省电/延迟的平衡点，Fedora 同版本内核默认也是它。`PREEMPT_DYNAMIC` 仍为 y，启动参数 `preempt=none|voluntary|full` 可覆盖。
 
-1. 构建日志里出现 `Building with KCFLAGS=-march=x86-64-v3`（spec 里显式 echo）。
-2. 装好后 `uname -r` 是 `7.2.4-zen2.v3.fc44.x86_64`（power 档则是 `-power2.v3`）。
-3. 指令级抽查，**两个包对比同一个模块**（xfs 在 zen config 里是模块，`CONFIG_XFS_FS=m`）：
+`CONFIG_PCIEASPM_*` **不动**，保持 BIOS 默认：powersave 能省一点电，但部分机型 PCIe 链路会出兼容性问题（这也是它不作为内核默认值的原因），需要时用启动参数 `pcie_aspm=powersave` 单独开。zen config 本来就省电的部分（`RCU_LAZY`、`WQ_POWER_EFFICIENT_DEFAULT`、SATA LPM、`snd_hda` power save、`schedutil`、`TEO`、MGLRU 等）没有重复设置。
 
-   ```bash
-   objdump -d /lib/modules/$(uname -r)/kernel/fs/xfs/xfs.ko \
-     | grep -cE '\b(popcnt|andn|bzhi|mulx|shlx)\b'
+**诚实的边界**：内核配置只是耗电的一环——笔电上 S0ix/固件、`TLP`/`powertop`、屏幕与 WiFi 策略、`*_pstate` governor 的影响通常更大。本包只保证「内核这一层是省电取向」，不承诺续航数字；要量化就在同一台机器上用 `powertop`/`turbostat` 对比。
+
+### 5.4 v3 与向量寄存器
+
+内核 `arch/x86/Makefile` 有 `-mno-sse -mno-mmx -mno-sse2 -mno-3dnow -mno-avx -mno-sse4a`。**实测 GCC 16 与 clang 22 都是显式 `-mno-*` 优先于 `-march=x86-64-v3`**：GCC 的 `-Q --help=target` 显示 `-msse`/`-mavx`/`-mavx2` disabled、`-mbmi`/`-mbmi2`/`-mmovbe`/`-mpopcnt` enabled；clang 的预定义宏里 `__AVX__`/`__AVX2__`/`__SSE__` 未定义，而 `__BMI__`/`__BMI2__`/`__MOVBE__`/`__POPCNT__`/`__LZCNT__` 已定义。所以 v3 只带来整数类新指令，内核不会生成 FP/SIMD 代码，**也能与 clang ThinLTO 安全叠加**。mainline 的 `CONFIG_X86_NATIVE_CPU` 是在同一位置追加 `-march=native`，机制相同。Rust 侧没有跟着设 `KRUSTFLAGS`（`KBUILD_RUSTFLAGS` 本来就是 `-Ctarget-cpu=x86-64`，Rust 代码在内核里占比很小）。
+
+## 6. 静默失效陷阱汇总
+
+这一类的共同点：**命令执行成功、退出码 0、没有任何报错，但配置根本没生效**。已经踩到三次：
+
+| # | 写法 | 为什么失效 | 正确做法 |
+| --- | --- | --- | --- |
+| 6.1 | `scripts/config --set-val X86_64_VERSION 3` | 符号不存在（只有外挂 patch 才有） | 用 `KCFLAGS=-march=x86-64-v3`（5.1） |
+| 6.2 | LTO 包里用裸 `make olddefconfig` | `HAS_LTO_CLANG` 由 Kconfig 按 `$(CC)` 当场探测，gcc 下判定为 n，`LTO_CLANG_THIN` 被丢弃 | 用 `%make_build olddefconfig`（自带 `_lto_args`） |
+| 6.3 | `-d PREEMPT -e PREEMPT_VOLUNTARY` | x86 上 `PREEMPT_VOLUNTARY` 依赖 `!ARCH_HAS_PREEMPT_LAZY`，写进去会被丢弃 | 先 `sed -i '/^CONFIG_PREEMPT=/d' .config`，再 `-e PREEMPT_LAZY` |
+
+**通用判据**：某项配置是否真的生效，看构建日志里 `%prep` 打出的 `diff -u config .config`，不要只看 `scripts/config` 的命令行。
+
+## 7. 签名与外部模块
+
+**签名在安装时于本机完成，不在构建里签**：私钥只存在于用户机器的 `/etc/pki/akmods/private/private_key.priv`，Copr 沙箱里没有。`%posttrans core` 在 `kernel-install` 之后执行：优先用 `certs/public_key.pem`、回退 `.der`（Fedora 的 `kmodgenca` 默认只生成 `.der`，两种 `sbsign` 都接受）；证书与私钥都在且 `sbsign` 可用时，对 `/boot/vmlinuz-<kver>`（grub 布局）或 `/boot/*/<kver>/linux`（BLS 布局）签名；缺密钥或缺 `sbsign` 时打印 `NOTE:`/`WARNING:` 跳过，**不会让安装失败**，但此时 Secure Boot 机器无法启动该内核。公钥要先注册进 MOK（一次）：`sudo mokutil --import /etc/pki/akmods/certs/public_key.der`。树内模块由内核自己的 `MODULE_SIG_ALL` 用构建时的一次性密钥签名，与此无关。
+
+**外部模块（akmods/dkms）**要装匹配的 `kernel-*-devel-matched`；依赖跟着工具链走——非 LTO 包是 `Requires: gcc`，而 `kernel-power-lto-devel` 是 `Requires: clang`/`lld`/`llvm`（内核用 clang + LTO 编，模块必须同工具链）。
+
+**不产出 `kernel-headers`**：Fedora 官方包已占用 `/usr/include/linux`、`/usr/include/asm`，再出一份会 file conflict（二者只能装一个），替换它又会影响 glibc 等用户空间构建；外部模块编译用 `-devel` 就够。同样不产出 `kernel-debuginfo`。
+
+## 8. Copr 工程与自动化
+
+| 工程 | chroot | package |
+| --- | --- | --- |
+| `binarytree/linux-zen-fedora` | fedora-44 + rawhide | kernel-zen、kernel-zen-v3 |
+| `binarytree/linux-power` | fedora-44 + rawhide | kernel-power、kernel-power-v3 |
+| `binarytree/linux-power-lto` | fedora-44 | kernel-power-lto |
+
+公共设置：`enable_net=on`（kernel.org tarball 在 rpkg 生成 SRPM 阶段下载）、`follow_fedora_branching=off`、`module_hotfixes=off`、`multilib=off`、`appstream=off`、`auto_prune=on`。
+
+**自动化**：`copr-build.yml` 每天 03:17 UTC 跑 `scripts/sync_upstream.py`——它读 GitHub release，只认 `vX.Y.Z-zenN` 且必须带 `linux-<tag>.patch.zst` 附件（找不到就报错退出，不会静默用旧版本），把 5 份 spec 的四个版本宏一起更新、并刷新 `config`；有 diff 就提交（`[skip ci]`），随后用 `copr-cli buildscm --type git --method rpkg` 按矩阵（5 个 spec → 3 个工程）触发构建。需要仓库 secret `COPR_CLI_CONFIG`；手动重跑在 Actions 里勾 `force_build`。
+
+**三个环境坑**：
+
+1. **容器内 IPv6**：容器里 IPv6 不通，Python 的 `getaddrinfo` 又优先返回 AAAA → `copr-cli` 的 API 调用挂在 IPv6 连接上，且表现为「无输出 + 退出码 0」的**假成功**；同一个请求 `curl` 1 秒返回（curl 的 Happy Eyeballs 会自动回退 IPv4）。绕法：强制 IPv4 后用 python-copr 库，或把命令放到宿主机跑。
+
+   ```python
+   import socket
+   _gai = socket.getaddrinfo
+   socket.getaddrinfo = lambda h, p, f=0, t=0, pr=0, fl=0: _gai(h, p, socket.AF_INET, t, pr, fl)
+   from copr.v3 import Client
    ```
 
-   非零说明编译时确实带了 v3；baseline 包同一模块应明显更少。只看非零不够，要两个包对比。
-4. 性能/功耗不承诺具体数字；要量化就在同一台机器上自己压测。
+2. **工程不能改名**：`copr-cli` 没有 rename 子命令，`ProjectProxy` 也没有 rename 方法；改名只能用「新建 + 重建 + 删旧」实现。旧工程连同构建历史一起消失、其 URL 随之失效——现在三个工程统一成 `linux-*` 前缀就是这么来的。
 
-### 13.5 风险
+3. **描述格式**：Copr 用受限 Markdown——标题、列表、4 空格缩进代码块、行内代码、粗体、链接都能渲染，**表格不行**（`| a | b |` 会连竖线一起原样显示）。description / instructions 一律用列表代替表格。
+
+**资源预期**：本仓库实测 kernel-zen 首轮 102.3 分钟、kernel-power 120 分钟（单 chroot，含 SRPM 生成）；同类项目 `bieszczaders/kernel-cachyos` 一轮 6 chroot 约 120–128 分钟，Copr 单次构建上限约 5 小时。SRPM 生成阶段（`importing` 状态）对内核包很重——要下载 ~150MB 的 tarball，多个全新 package 并发时会明显排队。
+
+## 9. 验证清单
+
+**构建期**：`%prep` 的 `diff -u config .config` 显示 zen 补丁干净应用（0 fuzz）、变体改动确实出现、Fedora 适配就位；LTO 构建能看到 `CONFIG_LTO_NONE=y` → `CONFIG_LTO_CLANG_THIN=y`；v3 构建日志里出现 spec 主动 echo 的 `Building with KCFLAGS=-march=x86-64-v3`；`%build` 不 OOM、不逼近 5 小时。
+
+**装机后**：`uname -r` 等于对应 `_kver`（本仓库当前是 `7.2.4-{zen2,zen2.v3,power2,power2.v3,power2.lto}.fc44.x86_64`）；`journalctl -k | head` 无模块签名/依赖类错误；LTO 包的 `/lib/modules/<kver>/config` 里有 `CONFIG_LTO_CLANG_THIN=y` 与 `CONFIG_LTO_CLANG=y` 且 `CONFIG_LTO_NONE` 消失（这是 LTO 唯一可直接查证的证据）；akmods/dkms 能对着对应的 `-devel-matched` 编出模块。
+
+**指令级（只对 v3 包）**：
+
+```bash
+objdump -d /lib/modules/$(uname -r)/kernel/fs/xfs/xfs.ko | grep -cE '\b(popcnt|andn|bzhi|mulx|shlx)\b'
+```
+
+`CONFIG_XFS_FS=m`，挑任一必然存在的模块即可。**必须两个包对比**（v3 与 baseline 的同一个模块），只看非零不够——少量命中可能只是巧合。v3 的收益「小但真实」，不承诺具体数字。
+
+## 10. 风险与回退
 
 | # | 风险 | 处理 |
 | --- | --- | --- |
-| 13.1 | 不支持的 CPU 上 v3 内核无法启动 | 包名与 `uname -r` 都带 `v3`，README 写明门槛；grub 里保留 baseline 内核 |
-| 13.2 | 构建量翻倍（4 包 × chroot，单轮数小时机器时间） | Copr 里按需只构建需要的 package |
-| 13.3 | v3 的收益是「小但真实」，别期待质变 | 如实说明，不承诺数字；依据见 graysky 的 benchmark |
+| 10.1 | Arch config 与内核版本错位，新选项取默认值 | `olddefconfig` 兜底 + 每次升版 review config diff |
+| 10.2 | 工具链不满足内核要求（pahole/BTF、rustc、clang） | 升级 chroot；或临时关 `DEBUG_INFO_BTF`（并去掉 `bpftool vmlinux.h` 那步）/ `_build_rust 0` |
+| 10.3 | 上游改 tag 或资产命名、只发 lqx | 同步脚本报错退出，不会静默用旧版本 |
+| 10.4 | `DEBUG_INFO=y` 让构建逼近 5 小时或撑爆磁盘 | 看实测耗时；必要时关调试信息，或降低并行度换内存 |
+| 10.5 | ThinLTO 链接很重、构建更慢 | LTO 工程目前只开 fedora-44 一个 chroot |
+| 10.6 | Rust + LTO（rustc 与 clang 的 LLVM 版本不一致） | 内核 `rust/Makefile` 有 `ifdef CONFIG_LTO` 专门处理；真失败就 `_build_rust 0` 重试 |
+| 10.7 | 老 CPU 上 v3 内核无法启动 | 包名与 `uname -r` 都带 `v3`，grub 里保留 baseline 内核可切回 |
+| 10.8 | 安装时未签名（缺密钥 / `sbsign` / MOK 未注册） | `%posttrans` 打印 `NOTE:`；按第 7 节补签 + `mokutil --import` |
+| 10.9 | Copr API 抖动、GitHub API 限流 | 手动 `force_build` 重跑；同步脚本支持 `GITHUB_TOKEN`（workflow 已注入） |
 
-Copr 侧只需给两个现有工程各加一个 package（首次 `buildscm` 也会自动创建）：
+**回退**：版本信息全在 git 里，`git revert` 同步提交即可回到上一个内核版本再手动触发构建；临时停自动化就把 workflow 的 `schedule` 注释掉，改手工跑 `scripts/sync_upstream.py` + `copr-cli buildscm`。
 
-```bash
-copr-cli add-package-scm binarytree/linux-zen-fedora --name kernel-zen-v3 \
-  --clone-url https://github.com/red-blakTree/zen-kernel-fedora \
-  --spec kernel-zen-v3.spec --type git --method rpkg
-copr-cli add-package-scm binarytree/linux-power --name kernel-power-v3 \
-  --clone-url https://github.com/red-blakTree/zen-kernel-fedora \
-  --spec kernel-power-v3.spec --type git --method rpkg
-```
+## 11. 明确不做的事
 
-## 14. LTO 变体（kernel-power-lto，独立 Copr 工程）
+- `kernel-headers` 子包（会与 Fedora 自带包文件冲突，见第 7 节）与 `kernel-debuginfo`；
+- **构建期**签名（签不了，见第 7 节）；
+- RT / lqx 变体；非 x86_64 架构；
+- IMA / secure boot 相关 config、nvidia-open 随内核构建、modprobed-db 最小化配置；
+- CachyOS 的 `CACHY` / `SCHED_BORE` 开关（zen 补丁已包含其调度器改动）。
 
-第 9 节把 clang/ThinLTO 列为「本次不做」，这一节落地：单独一个包、单独一个 Copr 工程
-`binarytree/linux-power-lto`；配置仍是省电档（`HZ=300` + `PREEMPT_LAZY`），只换工具链。
+## 12. 附录：历史记录
 
-### 14.1 与 CachyOS 的 LTO 实现逐项对齐
+**首轮构建 Copr build 10975417（成功）**：手工一次性 `copr-cli buildscm --commit 5a898f3 --spec kernel-zen.spec --type git --method rpkg`；chroot 为 `fedora-44-x86_64`（当时工程只开了这一个），耗时 **102.3 分钟**；产物是 `kernel-zen-7.2.4-zen2.fc44.x86_64.rpm` 及 `-core` / `-modules` / `-devel` / `-devel-matched` / `.src.rpm`；repodata 里三处 provide 一致（`kernel-core-uname-r` = `kernel-modules-uname-r` = `kernel-devel-uname-r` = `7.2.4-zen2.fc44.x86_64`）。这轮验证的是「spec + config + 上游 7.2.4-zen2」能编过，也确认了 `zstd -dc | patch -p1`、`olddefconfig`、`bpftool vmlinux.h`、`kernel-devel` 文件清单都没有问题。
 
-| 项 | CachyOS `kernel-cachyos-lto.spec` | 本仓库 `kernel-power-lto.spec` |
-| --- | --- | --- |
-| make 参数 | `%define make_build make %{?_lto_args} %{?_smp_mflags}` | 同 |
-| 参数内容 | `CC=clang CXX=clang++ LD=ld.lld LLVM=1 LLVM_IAS=1` | 同 |
-| Kconfig | `scripts/config -e LTO_CLANG_THIN` | 同 |
-| 构建依赖 | `BuildRequires: clang` / `lld` / `llvm` | 同 |
-| devel 依赖 | LTO 时 `Requires: clang`/`lld`/`llvm`，否则 `gcc` | 同 |
-| 包名 | `Name: kernel-cachyos%{?_lto_args:-lto}`，动态 | 独立 spec，硬编码 `kernel-power-lto` |
+> ⚠️ 该构建属于**已删除的旧 Copr 工程** `binarytree/zen-kernel-fedora`。工程改名是按「新建 + 重建 + 删旧」做的，旧工程连同它的构建历史已被删除，因此 `https://copr.fedorainfracloud.org/coprs/build/10975417` 与当时的 `results/binarytree/zen-kernel-fedora/…` 路径**都已失效**，保留下来的只有上面这些数据。
 
-最后一行是有意不同：CachyOS 靠 `_lto_args` 有没有定义来动态改包名，一个 spec 兼产两种包；
-本仓库的 Copr 是按 spec 文件区分 package 的（`buildscm --spec`），且既有的 kernel-zen /
-kernel-power / `*-v3` 都是「一个变体一份 spec」，这里保持一致，不做动态命名。
-
-### 14.2 最容易踩的坑：olddefconfig 也必须用 clang
-
-`CONFIG_LTO_CLANG_THIN` 的依赖是 `HAS_LTO_CLANG && ARCH_SUPPORTS_LTO_CLANG_THIN`，而
-`HAS_LTO_CLANG` 由 Kconfig 按 `$(CC)` 是不是 clang **当场探测**。`%prep` 里若还用裸的
-`make olddefconfig`（默认 gcc），`LTO_CLANG_THIN` 会被 olddefconfig 直接丢掉——又一次
-「命令写了、实际没生效」的静默失效，和 5.2 节 `X86_64_VERSION`、12.1 节 `PREEMPT_VOLUNTARY`
-是同一类。因此 `%prep` 改成 `%make_build olddefconfig`，展开后自带 `_lto_args`（CachyOS 亦然）。
-
-### 14.3 验证（比 v3 好验，config 里有据可查）
-
-1. `%prep` 的 `diff -u config .config` 里应看到 `CONFIG_LTO_NONE=y` → `CONFIG_LTO_CLANG_THIN=y`；
-2. 装好后 `/lib/modules/<kver>/config` 应有 `CONFIG_LTO_CLANG_THIN=y` 与 `CONFIG_LTO_CLANG=y`，
-   且 `CONFIG_LTO_NONE` 消失；
-3. `uname -r` = `7.2.4-power2.lto.fc44.x86_64`。
-
-### 14.4 外部模块
-
-内核用 clang 编，模块就必须用 clang 编（LTO 的 LLVM bitcode 与 gcc 目标文件不能混）。所以
-`%package devel` 在 LTO 时 `Requires: clang/lld/llvm` 而不是 gcc；BuildRequires 里 gcc 与
-clang/lld/llvm 并存（rpmbuild 阶段两者都会用到）。
-
-### 14.5 风险
-
-| # | 风险 | 处理 |
-| --- | --- | --- |
-| 14.1 | ThinLTO 链接很重，构建可能逼近 Copr 5 小时上限 | 首次构建盯 build.log 的耗时；必要时只保留 fedora-44 一个 chroot，或临时关 `DEBUG_INFO_BTF` |
-| 14.2 | rustc 与 clang 的 LLVM 版本不一致时，Rust + LTO 可能出问题 | 内核 `rust/Makefile` 有 `ifdef CONFIG_LTO` 专门处理，先按开 Rust 构建；真失败就把 `_build_rust` 改成 0 重试 |
-| 14.3 | LTO 与个别驱动的兼容性 | 与其它内核并存，grub 里随时切回 |
-
-工程创建（一次性）：
-
-```bash
-copr-cli create kernel-power-lto --chroot fedora-44-x86_64 --enable-net on
-```
-
+**待清理项**：`mycopr/packages/kernel-zen/`（草稿 spec + Arch config，未提交）已被本仓库取代、内容一致，建议删除以免两处漂移。
