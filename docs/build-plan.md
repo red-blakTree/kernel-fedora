@@ -182,6 +182,34 @@ copr-cli --config ~/.config/copr buildscm \
   binarytree/zen-kernel-fedora
 ```
 
+> **容器内（distrobox）的坑**：容器里 IPv6 不通，而 Python 的 `getaddrinfo` 优先返回 AAAA，
+> 于是 `copr-cli` 的 API 调用会卡在 IPv6 连接上直到超时——`whoami` 偶尔能过，`list-packages` /
+> `buildscm` / `add-package-scm` 必挂，而且「无输出 + 退出码 0」看起来像成功，实则被 timeout 杀掉；
+> 同一个请求换成 `curl` 1 秒就返回（curl 带 Happy Eyeballs 会自动回退 IPv4）。绕法是让 Python
+> 只解析 IPv4，再直接用 python-copr 库：
+>
+> ```python
+> import socket
+> _gai = socket.getaddrinfo
+> socket.getaddrinfo = lambda h, p, f=0, t=0, pr=0, fl=0: _gai(h, p, socket.AF_INET, t, pr, fl)
+>
+> from copr.v3 import Client
+> client = Client.create_from_config_file()
+> # 建 SCM package
+> client.package_proxy.add("binarytree", "zen-kernel-fedora", "kernel-zen-v3", "scm", {
+>     "clone_url": "https://github.com/red-blakTree/zen-kernel-fedora",
+>     "committish": "<commit>", "spec": "kernel-zen-v3.spec",
+>     "scm_type": "git", "source_build_method": "rpkg",
+> })
+> # 触发构建
+> client.build_proxy.create_from_scm(
+>     "binarytree", "zen-kernel-fedora",
+>     "https://github.com/red-blakTree/zen-kernel-fedora",
+>     committish="<commit>", spec="kernel-zen-v3.spec",
+>     scm_type="git", source_build_method="rpkg")
+> ```
+>
+> 或者把这些命令放到宿主机上跑（宿主机没有这个 IPv6 问题）。
 ### 6.1 资源预期（实测参照）
 
 - 同类项目单 chroot 构建：`bieszczaders/kernel-cachyos` 一轮 6 个 chroot 约 120–128 分钟；
