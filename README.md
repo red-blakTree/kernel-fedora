@@ -79,18 +79,21 @@ x86-64-v3 大致对应 Intel Haswell（2013）/ AMD Excavator（2015）及以后
 
 | 文件 | 作用 |
 | --- | --- |
-| `kernel-*.spec`（5 份） | 每个变体一份 spec，各自构建 `-core` / `-modules` / `-devel` / `-devel-matched` |
-| `config` | 内核 config 基线，来自 Arch linux-zen，由同步脚本自动刷新 |
-| `scripts/sync_upstream.py` | 读 GitHub release，更新 5 份 spec 的版本宏与 `config` |
-| `.github/workflows/copr-build.yml` | 每天检查上游；有更新时提交并把 5 份 spec 投给 3 个 Copr 工程 |
+| `linux-zen-fedora/` | kernel-zen、kernel-zen-v3 两份 spec + 该工程的 `config` |
+| `linux-power/` | kernel-power、kernel-power-v3 两份 spec + `config` |
+| `linux-power-lto/` | kernel-power-lto 一份 spec + `config` |
+| `scripts/sync_upstream.py` | 读 GitHub release，更新 5 份 spec 的版本宏，并把新 config 同步写入三个目录 |
+| `.github/workflows/copr-build.yml` | 每天检查上游；有更新时提交，并按矩阵（带 `--subdir`）投给 3 个 Copr 工程 |
 
-`kernel-*.spec` 顶部四个宏由脚本维护，手工改版本时也要一起改：
+三个目录各有一份内容完全相同的 `config`（`Source2` 是按 spec 所在目录解析的，必须与 spec 同目录；由同步脚本
+一起刷新以保证一致）。每份 spec 顶部四个宏由脚本维护，手工改版本时也要一起改：
 `_majver`（kernel.org 的 v7.x）、`_basekver`（7.2）、`_stablekver`（4）、`_zenrel`（zen 补丁序号 2）。
 
 ## 本地构建（mock，可选，默认不做）
 
 ```bash
 sudo dnf install -y mock rpmdevtools rpm-build spectool
+cd linux-zen-fedora
 rpmspec -P kernel-zen.spec && spectool -g kernel-zen.spec
 mock -r fedora-44-x86_64 --buildsrpm --spec kernel-zen.spec --sources .
 mock -r fedora-44-x86_64 --rebuild ./kernel-zen-*.src.rpm

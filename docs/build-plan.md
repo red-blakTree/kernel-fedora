@@ -1,6 +1,6 @@
 # zen-kernel-fedora 设计说明
 
-把上游 [zen-kernel](https://github.com/zen-kernel/zen-kernel) 打成 Fedora RPM，在三个 Copr 工程上构建。本文记录设计取舍、实现方式与踩过的坑；落地文件是 5 份 spec、`config`、`scripts/sync_upstream.py` 与 `.github/workflows/copr-build.yml`。
+把上游 [zen-kernel](https://github.com/zen-kernel/zen-kernel) 打成 Fedora RPM，在三个 Copr 工程上构建。本文记录设计取舍、实现方式与踩过的坑；落地文件是按 Copr 工程分目录的三组 spec（`linux-zen-fedora/`、`linux-power/`、`linux-power-lto/`，每组各带一份作为 `Source2` 的 `config`）、`scripts/sync_upstream.py` 与 `.github/workflows/copr-build.yml`。
 
 ## 1. 目标与现状
 
@@ -18,7 +18,7 @@
 
 ## 2. 上游与源码组合
 
-Source0 = kernel.org 原版 `linux-7.2.4.tar.xz`，Source1 = zen 的 `linux-v7.2.4-zen2.patch.zst`，Source2 = 仓库内的 `config`（Arch 官方 linux-zen 的 config，CI 刷新）；`%prep` 用 `zstd -dc %{SOURCE1} | patch -p1` 应用补丁。
+Source0 = kernel.org 原版 `linux-7.2.4.tar.xz`，Source1 = zen 的 `linux-v7.2.4-zen2.patch.zst`，Source2 = 与 spec 同目录的 `config`（Arch 官方 linux-zen 的 config；rpkg 按 spec 所在目录解析 Source，所以三个工程目录各有一份、由 CI 同步写入）；`%prep` 用 `zstd -dc %{SOURCE1} | patch -p1` 应用补丁。
 
 不采用 CachyOS 那种「GitHub tag 归档」作源码：与 Arch 官方 `linux-zen` 同源（kernel.org 原版 + zen 补丁 + Arch config）因而行为可对齐；zen 补丁只有 ~150KB，可人工审阅；GitHub 的动态 tag 归档不是稳定发布的固定文件。config 放仓库而不在构建时现拉，是为了可 review、可复现——构建结果不依赖 Arch main 分支当时的提交，只有内核升版对齐时才由 CI 刷新。
 
@@ -141,7 +141,7 @@ Arch config 是 `CONFIG_RUST=y`；内核 `scripts/min-tool-version.sh` 要求 ru
 
 公共设置：`enable_net=on`（kernel.org tarball 在 rpkg 生成 SRPM 阶段下载）、`follow_fedora_branching=off`、`module_hotfixes=off`、`multilib=off`、`appstream=off`、`auto_prune=on`。
 
-**自动化**：`copr-build.yml` 每天 03:17 UTC 跑 `scripts/sync_upstream.py`——它读 GitHub release，只认 `vX.Y.Z-zenN` 且必须带 `linux-<tag>.patch.zst` 附件（找不到就报错退出，不会静默用旧版本），把 5 份 spec 的四个版本宏一起更新、并刷新 `config`；有 diff 就提交（`[skip ci]`），随后用 `copr-cli buildscm --type git --method rpkg` 按矩阵（5 个 spec → 3 个工程）触发构建。需要仓库 secret `COPR_CLI_CONFIG`；手动重跑在 Actions 里勾 `force_build`。
+**自动化**：`copr-build.yml` 每天 03:17 UTC 跑 `scripts/sync_upstream.py`——它读 GitHub release，只认 `vX.Y.Z-zenN` 且必须带 `linux-<tag>.patch.zst` 附件（找不到就报错退出，不会静默用旧版本），把 5 份 spec 的四个版本宏一起更新、并把新 config 同步写入三个工程目录；有 diff 就提交（`[skip ci]`），随后用 `copr-cli buildscm --type git --method rpkg` 按矩阵（5 个 spec → 3 个工程，带 `--subdir` 指向工程目录）触发构建。需要仓库 secret `COPR_CLI_CONFIG`；手动重跑在 Actions 里勾 `force_build`。
 
 **三个环境坑**：
 

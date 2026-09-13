@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""检测 zen-kernel 最新正式版本，更新五个 spec（zen / power 的 baseline 与 v3 变体，外加 power 的 LTO 变体）的版本宏与 config。
+"""检测 zen-kernel 最新正式版本，更新五个 spec（按 Copr 工程分目录）的版本宏与三份 config。
 
 - 只认 tag 形如 v7.2.4-zen2 且带 linux-<tag>.patch.zst 附件的正式发布，
   lqx 系列（v7.2.4-lqx4）会被忽略。
@@ -23,13 +23,20 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SPECS = [
-    REPO_ROOT / "kernel-zen.spec",
-    REPO_ROOT / "kernel-zen-v3.spec",
-    REPO_ROOT / "kernel-power.spec",
-    REPO_ROOT / "kernel-power-v3.spec",
-    REPO_ROOT / "kernel-power-lto.spec",
+    REPO_ROOT / "linux-zen-fedora" / "kernel-zen.spec",
+    REPO_ROOT / "linux-zen-fedora" / "kernel-zen-v3.spec",
+    REPO_ROOT / "linux-power" / "kernel-power.spec",
+    REPO_ROOT / "linux-power" / "kernel-power-v3.spec",
+    REPO_ROOT / "linux-power-lto" / "kernel-power-lto.spec",
 ]
-CONFIG = REPO_ROOT / "config"
+
+# config 是 spec 的 Source2，rpkg 按 spec 所在目录解析它，所以每个工程目录各放一份；
+# 由本脚本一起刷新，三份内容必须完全一致。
+CONFIGS = [
+    REPO_ROOT / "linux-zen-fedora" / "config",
+    REPO_ROOT / "linux-power" / "config",
+    REPO_ROOT / "linux-power-lto" / "config",
+]
 
 RELEASES_URL = "https://api.github.com/repos/zen-kernel/zen-kernel/releases?per_page=30"
 ARCH_CONFIG_URL = (
@@ -93,9 +100,10 @@ def main() -> int:
     except (urllib.error.URLError, TimeoutError) as exc:
         print(f"WARNING: 拉取 Arch config 失败（保持仓库内原文件）：{exc}", file=sys.stderr)
     else:
-        if CONFIG.read_bytes() != config:
-            CONFIG.write_bytes(config)
-            print("config 已更新（来自 Arch linux-zen）")
+        if any(path.read_bytes() != config for path in CONFIGS):
+            for path in CONFIGS:
+                path.write_bytes(config)
+            print("config 已更新（三个工程目录同步写入，来自 Arch linux-zen）")
 
     print(f"tag={tag} version={version} zenrel={parts['zenrel']}")
     return 0
