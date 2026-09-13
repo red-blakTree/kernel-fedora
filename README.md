@@ -1,9 +1,9 @@
 # zen-kernel-fedora
 
-[![Copr build status](https://copr.fedorainfracloud.org/coprs/binarytree/zen-kernel-fedora/package/kernel-zen/status_image/last_build.png)](https://copr.fedorainfracloud.org/coprs/binarytree/zen-kernel-fedora/package/kernel-zen/)
+[![Copr build status](https://copr.fedorainfracloud.org/coprs/binarytree/linux-zen-fedora/package/kernel-zen/status_image/last_build.png)](https://copr.fedorainfracloud.org/coprs/binarytree/linux-zen-fedora/package/kernel-zen/)
 
 把 [zen-kernel](https://github.com/zen-kernel/zen-kernel) 打成 Fedora 的 RPM，并在
-[Copr](https://copr.fedorainfracloud.org/coprs/binarytree/zen-kernel-fedora/) 上构建。
+[Copr](https://copr.fedorainfracloud.org/coprs/binarytree/linux-zen-fedora/) 上构建。
 
 打包骨架来自 CachyOS 的 Copr spec（`copr-linux-cachyos`），源码组合方式与
 Arch Linux 官方 `linux-zen` 一致：**kernel.org 原版源码 + zen 补丁 + Arch linux-zen config**，
@@ -20,7 +20,7 @@ Arch Linux 官方 `linux-zen` 一致：**kernel.org 原版源码 + zen 补丁 + 
 ## 安装
 
 ```bash
-sudo dnf copr enable binarytree/zen-kernel-fedora
+sudo dnf copr enable binarytree/linux-zen-fedora
 sudo dnf install kernel-zen
 ```
 
@@ -103,7 +103,7 @@ make 参数与 CachyOS 的 `kernel-cachyos-lto.spec` 一致：`CC=clang CXX=clan
 LLVM_IAS=1` 加上 `CONFIG_LTO_CLANG_THIN`。
 
 ```bash
-sudo dnf copr enable binarytree/kernel-power-lto
+sudo dnf copr enable binarytree/linux-power-lto
 sudo dnf install kernel-power-lto
 ```
 

@@ -1,7 +1,7 @@
 # kernel-power-lto.spec -- 省电向 Linux 内核（基于 linux-zen），clang + ThinLTO 构建
 #
-# 与 kernel-power.spec 的唯一区别：用 clang + ThinLTO 编译，make 参数与
-# copr-linux-cachyos 的 kernel-cachyos-lto.spec 一致。包名与 _kver 都不同，可以并存。
+# 与 kernel-power.spec 的区别：clang + ThinLTO 编译（make 参数与 copr-linux-cachyos 的
+# kernel-cachyos-lto.spec 一致），并叠加 x86-64-v3 优化（见 _x86_64_lvl）。包名与 _kver 都不同。
 #
 # 上游源码      : https://github.com/zen-kernel/zen-kernel（与 kernel-zen 同一 tag）
 # 打包骨架参考  : copr-linux-cachyos/sources/kernel-cachyos-bore/kernel-cachyos.spec
@@ -44,6 +44,13 @@
 %global _lto_args    CC=clang CXX=clang++ LD=ld.lld LLVM=1 LLVM_IAS=1
 %endif
 
+# x86-64 微架构级别：3 = x86-64-v3（Intel Haswell 2013 / AMD Excavator 2015 及以后）。
+# 同样走 KCFLAGS（zen-kernel 源码里没有 CONFIG_X86_64_VERSION）。内核 arch/x86/Makefile 的
+# -mno-sse/-mno-avx 优先于 -march：GCC 16 与 clang 22 都已实测，只会启用 BMI1/BMI2/MOVBE/
+# POPCNT/LZCNT 这类整数指令，不会让内核用向量寄存器，所以能和 clang + ThinLTO 叠加。
+%global _x86_64_lvl  3
+%global _kcflags     -march=x86-64-v%{_x86_64_lvl}
+
 # Rust for Linux：内核 scripts/min-tool-version.sh 要求 rustc >= 1.85.0、bindgen >= 0.71.1；
 # Fedora 44 与 rawhide 提供 rustc 1.98.1 / bindgen 0.72.1，已满足，因此默认开启。
 # 关闭时把这行改成 0（%prep 会 scripts/config -d RUST）。
@@ -53,7 +60,7 @@
 %define _devel_dir  %{_usrsrc}/kernels/%{_kver}
 
 Name:           kernel-power-lto
-Summary:        Power-saving Linux kernel for Fedora (based on linux-zen, clang ThinLTO)
+Summary:        Power-saving Linux kernel for Fedora (based on linux-zen, x86-64-v3 + clang ThinLTO)
 Version:        %{_basekver}.%{_stablekver}
 Release:        power%{_zenrel}.lto%{?dist}
 License:        GPL-2.0-only
@@ -109,8 +116,11 @@ The Linux ZEN kernel (https://github.com/zen-kernel/zen-kernel) packaged for
 Fedora, configured from the Arch Linux official linux-zen configuration with
 Fedora-specific adaptations (SELinux LSM, no hardcoded hostname).
 
-This build is compiled with clang and ThinLTO, using the same make arguments as
-CachyOS's kernel-cachyos-lto.  External modules must be built with clang too.
+This build is compiled with clang and ThinLTO (the same make arguments as CachyOS's
+kernel-cachyos-lto) and targets the x86-64-v3 microarchitecture level (BMI1/BMI2,
+MOVBE, POPCNT, LZCNT).  It needs an Intel Haswell / AMD Excavator (2013/2015) or
+newer CPU and will not boot on older machines.  External modules must be built
+with clang as well.
 
 %prep
 %setup -q -n linux-%{_basekver}.%{_stablekver}
@@ -168,7 +178,9 @@ scripts/config -d RUST
 diff -u %{SOURCE2} .config || :
 
 %build
-%make_build EXTRAVERSION=-%{release}.%{_arch} all
+# v3 优化与 ThinLTO 叠加：KCFLAGS 由顶层 Makefile 追加进 KBUILD_CFLAGS（最后生效）。
+echo "Building with KCFLAGS=%{_kcflags} + ThinLTO"
+%make_build EXTRAVERSION=-%{release}.%{_arch} KCFLAGS="%{_kcflags}" all
 %make_build -C tools/bpf/bpftool vmlinux.h feature-clang-bpf-co-re=1
 
 %install

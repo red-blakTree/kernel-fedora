@@ -161,7 +161,7 @@ Fedora 官方 `kernel-headers`（glibc 用的用户空间 ABI 基线）已占用
 ## 6. Copr 工程配置
 
 ```bash
-# 工程已建好：https://copr.fedorainfracloud.org/coprs/binarytree/zen-kernel-fedora/
+# 工程已建好：https://copr.fedorainfracloud.org/coprs/binarytree/linux-zen-fedora/
 # 当前设置与方案一致：
 #   chroots=fedora-44-x86_64, enable-net=on, follow-fedora-branching=off,
 #   module-hotfixes=off, multilib=off, appstream=off, auto-prune=on,
@@ -179,7 +179,7 @@ copr-cli --config ~/.config/copr buildscm \
   --clone-url https://github.com/red-blakTree/zen-kernel-fedora \
   --commit "$(git rev-parse HEAD)" \
   --spec kernel-zen.spec --type git --method rpkg \
-  binarytree/zen-kernel-fedora
+  binarytree/linux-zen-fedora
 ```
 
 > **容器内（distrobox）的坑**：容器里 IPv6 不通，而 Python 的 `getaddrinfo` 优先返回 AAAA，
@@ -273,13 +273,13 @@ copr-cli --config ~/.config/copr buildscm \
   copr-cli buildscm --nowait \
     --clone-url https://github.com/red-blakTree/zen-kernel-fedora \
     --commit 5a898f3 --spec kernel-zen.spec --type git --method rpkg \
-    binarytree/zen-kernel-fedora
+    binarytree/linux-zen-fedora
   ```
 
 - 构建页：https://copr.fedorainfracloud.org/coprs/build/10975417
 - chroot：`fedora-44-x86_64`（当时工程只开了这一个）
 - 耗时：**102.3 分钟**（提交到结束），落在第 6.1 节的 1–2 小时预期内
-- 产物（`results/binarytree/zen-kernel-fedora/fedora-44-x86_64/`）：
+- 产物（`results/binarytree/linux-zen-fedora/fedora-44-x86_64/`）：
   - `kernel-zen-7.2.4-zen2.fc44.x86_64.rpm`（元包）
   - `kernel-zen-core-7.2.4-zen2.fc44.x86_64.rpm`
   - `kernel-zen-modules-7.2.4-zen2.fc44.x86_64.rpm`
@@ -424,7 +424,7 @@ Rust 侧不跟着设 `KRUSTFLAGS`：`KBUILD_RUSTFLAGS` 本来就是 `-Ctarget-cp
 Copr 侧只需给两个现有工程各加一个 package（首次 `buildscm` 也会自动创建）：
 
 ```bash
-copr-cli add-package-scm binarytree/zen-kernel-fedora --name kernel-zen-v3 \
+copr-cli add-package-scm binarytree/linux-zen-fedora --name kernel-zen-v3 \
   --clone-url https://github.com/red-blakTree/zen-kernel-fedora \
   --spec kernel-zen-v3.spec --type git --method rpkg
 copr-cli add-package-scm binarytree/linux-power --name kernel-power-v3 \
@@ -435,7 +435,7 @@ copr-cli add-package-scm binarytree/linux-power --name kernel-power-v3 \
 ## 14. LTO 变体（kernel-power-lto，独立 Copr 工程）
 
 第 9 节把 clang/ThinLTO 列为「本次不做」，这一节落地：单独一个包、单独一个 Copr 工程
-`binarytree/kernel-power-lto`；配置仍是省电档（`HZ=300` + `PREEMPT_LAZY`），只换工具链。
+`binarytree/linux-power-lto`；配置仍是省电档（`HZ=300` + `PREEMPT_LAZY`），只换工具链。
 
 ### 14.1 与 CachyOS 的 LTO 实现逐项对齐
 
