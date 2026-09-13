@@ -1,4 +1,4 @@
-# zen-kernel-fedora 设计说明
+# kernel-fedora 设计说明
 
 把上游 [zen-kernel](https://github.com/zen-kernel/zen-kernel) 打成 Fedora RPM，在三个 Copr 工程上构建。本文记录设计取舍、实现方式与踩过的坑；落地文件是按 Copr 工程分目录的三组 spec（`linux-zen-fedora/`、`linux-power/`、`linux-power-lto/`，每组各带一份作为 `Source2` 的 `config`）、`scripts/sync_upstream.py` 与 `.github/workflows/copr-build.yml`。
 

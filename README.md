@@ -1,4 +1,4 @@
-# zen-kernel-fedora
+# kernel-fedora
 
 [![Copr build status](https://copr.fedorainfracloud.org/coprs/binarytree/linux-zen-fedora/package/kernel-zen/status_image/last_build.png)](https://copr.fedorainfracloud.org/coprs/binarytree/linux-zen-fedora/package/kernel-zen/)
 
@@ -7,7 +7,7 @@ Arch Linux 官方 `linux-zen` 一致：**kernel.org 原版 tarball + zen 补丁�
 config**，再在 `%prep` 里做 Fedora 适配（SELinux LSM、去掉硬编码主机名）；打包骨架参考 CachyOS 的
 `copr-linux-cachyos`。设计取舍、验证步骤与风险见 [docs/build-plan.md](docs/build-plan.md)。
 
-> 注意：GitHub 仓库名与本地目录名是 `zen-kernel-fedora`，而 Copr 工程名统一为 `linux-*`（历史原因）。
+> 本仓库（`kernel-fedora`）产出三个 Copr 工程：`linux-zen-fedora`、`linux-power`、`linux-power-lto`。
 
 ## 安装
 

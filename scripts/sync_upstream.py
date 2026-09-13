@@ -49,7 +49,7 @@ TAG_RE = re.compile(
 
 
 def fetch(url: str, timeout: int = 60) -> bytes:
-    headers = {"User-Agent": "zen-kernel-fedora-sync"}
+    headers = {"User-Agent": "kernel-fedora-sync"}
     token = os.environ.get("GITHUB_TOKEN")
     if token and "api.github.com" in url:
         headers["Authorization"] = f"Bearer {token}"
