@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""检测 zen-kernel 最新正式版本，更新四个 spec（zen / power，各自 baseline 与 v3 变体）的版本宏与 config。
+"""检测 zen-kernel 最新正式版本，更新五个 spec（zen / power 的 baseline 与 v3 变体，外加 power 的 LTO 变体）的版本宏与 config。
 
 - 只认 tag 形如 v7.2.4-zen2 且带 linux-<tag>.patch.zst 附件的正式发布，
   lqx 系列（v7.2.4-lqx4）会被忽略。
@@ -27,6 +27,7 @@ SPECS = [
     REPO_ROOT / "kernel-zen-v3.spec",
     REPO_ROOT / "kernel-power.spec",
     REPO_ROOT / "kernel-power-v3.spec",
+    REPO_ROOT / "kernel-power-lto.spec",
 ]
 CONFIG = REPO_ROOT / "config"
 

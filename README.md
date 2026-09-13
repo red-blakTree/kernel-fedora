@@ -96,19 +96,43 @@ v3 内核无法启动**，这类机器请继续用不带 `-v3` 的包。
 机制、为什么不照搬 CachyOS 的 `CONFIG_X86_64_VERSION`、以及怎么验证优化真的编进去了，
 见 [docs/build-plan.md](docs/build-plan.md) 第 13 节。
 
+## LTO 内核 kernel-power-lto
+
+在 kernel-power（省电档：`HZ=300` + `PREEMPT_LAZY`）基础上改用 **clang + ThinLTO** 构建，
+make 参数与 CachyOS 的 `kernel-cachyos-lto.spec` 一致：`CC=clang CXX=clang++ LD=ld.lld LLVM=1
+LLVM_IAS=1` 加上 `CONFIG_LTO_CLANG_THIN`。
+
+```bash
+sudo dnf copr enable binarytree/kernel-power-lto
+sudo dnf install kernel-power-lto
+```
+
+`uname -r` 形如 `7.2.4-power2.lto.fc44.x86_64`，与其它内核不同名、可以并存。
+
+两处与别的包不同：
+
+| 项 | 说明 |
+| --- | --- |
+| 外部模块 | `kernel-power-lto-devel` 依赖 `clang`/`lld`/`llvm`（**不是** `gcc`）——内核用 clang 编，模块就得用 clang 编 |
+| 构建耗时 | ThinLTO 链接很重，构建明显慢于普通包 |
+
+设计取舍、最容易踩的坑（`olddefconfig` 也必须用 clang）与验证方法见
+[docs/build-plan.md](docs/build-plan.md) 第 14 节。
+
 ## 仓库结构
 
 | 文件 | 作用 |
 | --- | --- |
 | `kernel-zen.spec` / `kernel-power.spec` | 两份 baseline spec，各自构建 `-core` / `-modules` / `-devel` / `-devel-matched` 子包 |
 | `kernel-zen-v3.spec` / `kernel-power-v3.spec` | 同上的 x86-64-v3 变体（见第 13 节） |
+| `kernel-power-lto.spec` | 省电档 + clang ThinLTO（见第 14 节），独立 Copr 工程 `kernel-power-lto` |
 | `config` | 内核 config 基线，来自 Arch linux-zen，由同步脚本自动刷新 |
 | `scripts/sync_upstream.py` | 读 GitHub release，更新 spec 的版本宏与 `config` |
 | `.github/workflows/copr-build.yml` | 每天检查上游；有更新时提交并触发 Copr `buildscm` |
 
 ## 版本宏
 
-`kernel-*.spec` 这四份 spec 顶部四个宏由脚本维护，手工改版本时也要一起改：
+`kernel-*.spec` 这五份 spec 顶部四个宏由脚本维护，手工改版本时也要一起改：
 
 ```spec
 %global _majver      7     # kernel.org 目录 v7.x

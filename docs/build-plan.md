@@ -431,3 +431,59 @@ copr-cli add-package-scm binarytree/linux-power --name kernel-power-v3 \
   --clone-url https://github.com/red-blakTree/zen-kernel-fedora \
   --spec kernel-power-v3.spec --type git --method rpkg
 ```
+
+## 14. LTO 变体（kernel-power-lto，独立 Copr 工程）
+
+第 9 节把 clang/ThinLTO 列为「本次不做」，这一节落地：单独一个包、单独一个 Copr 工程
+`binarytree/kernel-power-lto`；配置仍是省电档（`HZ=300` + `PREEMPT_LAZY`），只换工具链。
+
+### 14.1 与 CachyOS 的 LTO 实现逐项对齐
+
+| 项 | CachyOS `kernel-cachyos-lto.spec` | 本仓库 `kernel-power-lto.spec` |
+| --- | --- | --- |
+| make 参数 | `%define make_build make %{?_lto_args} %{?_smp_mflags}` | 同 |
+| 参数内容 | `CC=clang CXX=clang++ LD=ld.lld LLVM=1 LLVM_IAS=1` | 同 |
+| Kconfig | `scripts/config -e LTO_CLANG_THIN` | 同 |
+| 构建依赖 | `BuildRequires: clang` / `lld` / `llvm` | 同 |
+| devel 依赖 | LTO 时 `Requires: clang`/`lld`/`llvm`，否则 `gcc` | 同 |
+| 包名 | `Name: kernel-cachyos%{?_lto_args:-lto}`，动态 | 独立 spec，硬编码 `kernel-power-lto` |
+
+最后一行是有意不同：CachyOS 靠 `_lto_args` 有没有定义来动态改包名，一个 spec 兼产两种包；
+本仓库的 Copr 是按 spec 文件区分 package 的（`buildscm --spec`），且既有的 kernel-zen /
+kernel-power / `*-v3` 都是「一个变体一份 spec」，这里保持一致，不做动态命名。
+
+### 14.2 最容易踩的坑：olddefconfig 也必须用 clang
+
+`CONFIG_LTO_CLANG_THIN` 的依赖是 `HAS_LTO_CLANG && ARCH_SUPPORTS_LTO_CLANG_THIN`，而
+`HAS_LTO_CLANG` 由 Kconfig 按 `$(CC)` 是不是 clang **当场探测**。`%prep` 里若还用裸的
+`make olddefconfig`（默认 gcc），`LTO_CLANG_THIN` 会被 olddefconfig 直接丢掉——又一次
+「命令写了、实际没生效」的静默失效，和 5.2 节 `X86_64_VERSION`、12.1 节 `PREEMPT_VOLUNTARY`
+是同一类。因此 `%prep` 改成 `%make_build olddefconfig`，展开后自带 `_lto_args`（CachyOS 亦然）。
+
+### 14.3 验证（比 v3 好验，config 里有据可查）
+
+1. `%prep` 的 `diff -u config .config` 里应看到 `CONFIG_LTO_NONE=y` → `CONFIG_LTO_CLANG_THIN=y`；
+2. 装好后 `/lib/modules/<kver>/config` 应有 `CONFIG_LTO_CLANG_THIN=y` 与 `CONFIG_LTO_CLANG=y`，
+   且 `CONFIG_LTO_NONE` 消失；
+3. `uname -r` = `7.2.4-power2.lto.fc44.x86_64`。
+
+### 14.4 外部模块
+
+内核用 clang 编，模块就必须用 clang 编（LTO 的 LLVM bitcode 与 gcc 目标文件不能混）。所以
+`%package devel` 在 LTO 时 `Requires: clang/lld/llvm` 而不是 gcc；BuildRequires 里 gcc 与
+clang/lld/llvm 并存（rpmbuild 阶段两者都会用到）。
+
+### 14.5 风险
+
+| # | 风险 | 处理 |
+| --- | --- | --- |
+| 14.1 | ThinLTO 链接很重，构建可能逼近 Copr 5 小时上限 | 首次构建盯 build.log 的耗时；必要时只保留 fedora-44 一个 chroot，或临时关 `DEBUG_INFO_BTF` |
+| 14.2 | rustc 与 clang 的 LLVM 版本不一致时，Rust + LTO 可能出问题 | 内核 `rust/Makefile` 有 `ifdef CONFIG_LTO` 专门处理，先按开 Rust 构建；真失败就把 `_build_rust` 改成 0 重试 |
+| 14.3 | LTO 与个别驱动的兼容性 | 与其它内核并存，grub 里随时切回 |
+
+工程创建（一次性）：
+
+```bash
+copr-cli create kernel-power-lto --chroot fedora-44-x86_64 --enable-net on
+```
+

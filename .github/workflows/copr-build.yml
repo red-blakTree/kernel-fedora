@@ -68,6 +68,8 @@ jobs:
             spec: kernel-power.spec
           - project: binarytree/linux-power
             spec: kernel-power-v3.spec
+          - project: binarytree/kernel-power-lto
+            spec: kernel-power-lto.spec
     steps:
       - uses: actions/checkout@v5
         with:
