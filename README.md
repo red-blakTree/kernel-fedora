@@ -70,18 +70,45 @@ zen 配置里本来就省电的部分（`RCU_LAZY`、`WQ_POWER_EFFICIENT_DEFAULT
 外部模块（akmods/dkms）需要
 `kernel-zen-devel`，它由 `kernel-zen-devel-matched` 元包带入。
 
+## v3 架构优化内核 kernel-zen-v3 / kernel-power-v3
+
+同一份上游源码、同一份 `config`，只是内核另外用 `-march=x86-64-v3` 编译，多拿到 BMI1/BMI2、
+MOVBE、POPCNT、LZCNT 这类整数指令（内核自带的 `-mno-sse/-mno-avx` 仍然生效，不会用向量寄存器）。
+
+```bash
+sudo dnf install kernel-zen-v3       # 省电档则是 kernel-power-v3
+```
+
+| 包 | `uname -r` 形如 | CPU 要求 |
+| --- | --- | --- |
+| `kernel-zen` | `7.2.4-zen2.fc44.x86_64` | 任意 x86-64 |
+| `kernel-zen-v3` | `7.2.4-zen2.v3.fc44.x86_64` | x86-64-v3 |
+| `kernel-power` | `7.2.4-power2.fc44.x86_64` | 任意 x86-64 |
+| `kernel-power-v3` | `7.2.4-power2.v3.fc44.x86_64` | x86-64-v3 |
+
+x86-64-v3 大致对应 Intel Haswell（2013）/ AMD Excavator（2015）及以后的 CPU，可以先用
+`/lib64/ld-linux-x86-64.so.2 --help | grep supported` 看自己支持到哪一级。**不支持 v3 的机器上
+v3 内核无法启动**，这类机器请继续用不带 `-v3` 的包。
+
+四个包的 `_kver` 互不相同，`/lib/modules/<kver>` 与 `/boot/vmlinuz-<kver>` 都不冲突，可以同时装、
+在 grub 里各选一个；代价是每个内核连带 initramfs 要占 `/boot` 一两百 MB。
+
+机制、为什么不照搬 CachyOS 的 `CONFIG_X86_64_VERSION`、以及怎么验证优化真的编进去了，
+见 [docs/build-plan.md](docs/build-plan.md) 第 13 节。
+
 ## 仓库结构
 
 | 文件 | 作用 |
 | --- | --- |
-| `kernel-zen.spec` | 唯一的 spec，构建 `kernel-zen` / `-core` / `-modules` / `-devel` / `-devel-matched` |
+| `kernel-zen.spec` / `kernel-power.spec` | 两份 baseline spec，各自构建 `-core` / `-modules` / `-devel` / `-devel-matched` 子包 |
+| `kernel-zen-v3.spec` / `kernel-power-v3.spec` | 同上的 x86-64-v3 变体（见第 13 节） |
 | `config` | 内核 config 基线，来自 Arch linux-zen，由同步脚本自动刷新 |
 | `scripts/sync_upstream.py` | 读 GitHub release，更新 spec 的版本宏与 `config` |
 | `.github/workflows/copr-build.yml` | 每天检查上游；有更新时提交并触发 Copr `buildscm` |
 
 ## 版本宏
 
-`kernel-zen.spec` 顶部四个宏由脚本维护，手工改版本时也要一起改：
+`kernel-*.spec` 这四份 spec 顶部四个宏由脚本维护，手工改版本时也要一起改：
 
 ```spec
 %global _majver      7     # kernel.org 目录 v7.x

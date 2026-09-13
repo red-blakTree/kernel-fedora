@@ -95,7 +95,7 @@ Release:        zen%{_zenrel}%{?dist}                        # zen2.fc44
 | 源码 | GitHub tag 归档 `CachyOS/linux` | kernel.org 原版 tarball + zen 补丁 | 与 Arch 官方 linux-zen 同源；补丁只有 150KB 且可人工审阅；kernel.org tarball 是稳定发布的固定文件，不依赖 GitHub 动态生成归档 |
 | 补丁应用 | `%autopatch`（普通 `.patch`） | `zstd -dc %{SOURCE1} \| patch -p1` | zen 补丁是 `.patch.zst`，显式解压避免依赖 rpmbuild 对压缩补丁的处理 |
 | config | 构建时从 linux-cachyos 仓库拉 | 仓库内 `config` + 由 CI 从 Arch 刷新 | 可 review、可复现（构建不依赖 Arch main 分支当时的提交） |
-| ISA 等级 | `scripts/config --set-val X86_64_VERSION` | 删除 | 实测该内核 config 里**不存在** `CONFIG_X86_64_VERSION`（`grep` 结果为 0 命中），原写法是无效设置。需要 ISA 优化时应在 `%build` 用 `KCFLAGS` 传 `-march=x86-64-v3` |
+| ISA 等级 | `scripts/config --set-val X86_64_VERSION` | 删除 | 实测该内核 config 里**不存在** `CONFIG_X86_64_VERSION`（`grep` 结果为 0 命中），原写法是无效设置。需要 ISA 优化时应在 `%build` 用 `KCFLAGS` 传 `-march=x86-64-v3`（已在第 13 节的 v3 包中落地） |
 | symvers 压缩 | `zstdmt -19` | `zstd -19 -T0` | 同一 `zstd` 包提供，避免依赖 `zstdmt` 这个兼容入口 |
 | 配置继承 | 自身 config + `CACHY`/`SCHED_BORE` switch | 无 | zen 补丁已包含其调度器改动，没有 `CACHY` 这类开关 |
 | Rust | 关闭 | 关闭，但做成 `_build_rust` 开关 | 见 5.4 |
@@ -225,7 +225,7 @@ copr-cli --config ~/.config/copr buildscm \
 
 - `kernel-headers` 子包（需要 `%package headers` + `make headers_install` 的文件清单）。
 - clang/ThinLTO 变体（参照 `kernel-cachyos-lto.spec` 的 `_lto_args`）。
-- `_hz_tick`、`_x86_64_lvl` 这类可调宏（CachyOS 有，本方案按「先跑通」原则省掉）。
+- `_hz_tick`、`_x86_64_lvl` 这类可调宏：`_hz_tick` 已用于 kernel-power（12.1），x86-64 ISA 优化已独立成 v3 包（第 13 节）。
 - IMA/Secure Boot 相关 config（CachyOS 会打开 `CONFIG_IMA*`）。
 - nvidia-open 随内核一起构建。
 
@@ -313,3 +313,93 @@ workflow 改成矩阵，一次同步同时投两个工程。
 内核配置只是耗电的一环：笔电上 S0ix/固件、`TLP`/`powertop`、屏幕与 WiFi 省电策略、
 `intel_pstate`/`amd_pstate` 的 governor 参数影响通常更大。本包只保证「内核这一层是省电取向」，
 不承诺具体续航数字；要量化，就在同一台机器上用 `powertop`/`turbostat` 对比 zen 与 power 两个内核。
+
+## 13. v3 架构优化变体（kernel-zen-v3 / kernel-power-v3）
+
+第 9 节把 ISA 优化列为「本次不做」，这一节把它落地：baseline 之外再加两个包，内核用
+`-march=x86-64-v3` 编译。四个包互不冲突，可以同时安装。
+
+### 13.1 命名与并存
+
+| 包 | `Release` | `_kver` |
+| --- | --- | --- |
+| `kernel-zen` | `zen%{_zenrel}` | `7.2.4-zen2.fc44.x86_64` |
+| `kernel-zen-v3` | `zen%{_zenrel}.v3` | `7.2.4-zen2.v3.fc44.x86_64` |
+| `kernel-power` | `power%{_zenrel}` | `7.2.4-power2.fc44.x86_64` |
+| `kernel-power-v3` | `power%{_zenrel}.v3` | `7.2.4-power2.v3.fc44.x86_64` |
+
+`_kver` 不同 ⇒ `/lib/modules/<kver>`、`/boot/vmlinuz-<kver>`、`kernel-*-uname-r` provide 都不
+冲突。代价是构建量翻倍（4 包 × chroot），`/boot` 占用也翻倍。
+
+### 13.2 为什么不用 `CONFIG_X86_64_VERSION`（CachyOS 那条路走不通）
+
+CachyOS spec 写的是 `%define _x86_64_lvl 3` + `scripts/config --set-val X86_64_VERSION 3`，
+**照抄到 zen-kernel 上是静默 no-op**：`CONFIG_X86_64_VERSION` 不是 mainline 选项，而是
+[graysky2/kernel_compiler_patch](https://github.com/graysky2/kernel_compiler_patch) 往
+`arch/x86/Kconfig.cpu` 加的一个 Kconfig 项，外加 `arch/x86/Makefile` 里的
+`-march=x86-64-v$(CONFIG_X86_64_VERSION)`。CachyOS 的源码/补丁集里有这个 patch，zen-kernel
+没有，而 `scripts/config` 对不存在的符号是静默失效的 —— 正是 5.2 节 `X86_64_VERSION` 记的那个坑。
+
+本仓库改用 `KCFLAGS`（零外部补丁）：
+
+```spec
+%global _x86_64_lvl  3
+%global _kcflags     -march=x86-64-v%{_x86_64_lvl}
+...
+%make_build EXTRAVERSION=-%{release}.%{_arch} KCFLAGS="%{_kcflags}" all
+```
+
+顶层 `Makefile` 的 `KBUILD_CFLAGS += $(KCFLAGS)` 在 `include arch/x86/Makefile` 之后执行，
+注入点与 graysky patch 等价。**代价：它只出现在编译命令行里，`.config` diff 看不到**，所以
+5.3 节那套「看 config diff 判断是否生效」的验证对 v3 不适用，改看 13.4。
+
+### 13.3 安全性：`-march` 不会让内核用上向量寄存器
+
+`arch/x86/Makefile` 里有 `-mno-sse -mno-mmx -mno-sse2 -mno-3dnow -mno-avx -mno-sse4a`。
+在本容器实测（GCC 16.2.1）：
+
+```
+$ gcc -mno-sse -mno-mmx -mno-sse2 -mno-3dnow -mno-avx -mno-sse4a -march=x86-64-v3 -Q --help=target
+  -msse [disabled]  -mavx [disabled]  -mavx2 [disabled]
+  -mbmi [enabled]   -mbmi2 [enabled]  -mmovbe [enabled]  -mpopcnt [enabled]
+```
+
+显式的 `-mno-X` 优先于 `-march` 的默认值，与命令行顺序无关：v3 只带来 BMI1/BMI2/MOVBE/
+POPCNT/LZCNT 这类整数指令，内核仍不会生成 FP/SIMD 代码。mainline 的 `CONFIG_X86_NATIVE_CPU`
+也是在同一个位置追加 `-march=native`，机制相同。
+
+Rust 侧不跟着设 `KRUSTFLAGS`：`KBUILD_RUSTFLAGS` 本来就是 `-Ctarget-cpu=x86-64`，Rust 代码在
+内核里占比很小，暂时保持 baseline。
+
+### 13.4 验证
+
+1. 构建日志里出现 `Building with KCFLAGS=-march=x86-64-v3`（spec 里显式 echo）。
+2. 装好后 `uname -r` 是 `7.2.4-zen2.v3.fc44.x86_64`（power 档则是 `-power2.v3`）。
+3. 指令级抽查，**两个包对比同一个模块**（xfs 在 zen config 里是模块，`CONFIG_XFS_FS=m`）：
+
+   ```bash
+   objdump -d /lib/modules/$(uname -r)/kernel/fs/xfs/xfs.ko \
+     | grep -cE '\b(popcnt|andn|bzhi|mulx|shlx)\b'
+   ```
+
+   非零说明编译时确实带了 v3；baseline 包同一模块应明显更少。只看非零不够，要两个包对比。
+4. 性能/功耗不承诺具体数字；要量化就在同一台机器上自己压测。
+
+### 13.5 风险
+
+| # | 风险 | 处理 |
+| --- | --- | --- |
+| 13.1 | 不支持的 CPU 上 v3 内核无法启动 | 包名与 `uname -r` 都带 `v3`，README 写明门槛；grub 里保留 baseline 内核 |
+| 13.2 | 构建量翻倍（4 包 × chroot，单轮数小时机器时间） | Copr 里按需只构建需要的 package |
+| 13.3 | v3 的收益是「小但真实」，别期待质变 | 如实说明，不承诺数字；依据见 graysky 的 benchmark |
+
+Copr 侧只需给两个现有工程各加一个 package（首次 `buildscm` 也会自动创建）：
+
+```bash
+copr-cli add-package-scm binarytree/zen-kernel-fedora --name kernel-zen-v3 \
+  --clone-url https://github.com/red-blakTree/zen-kernel-fedora \
+  --spec kernel-zen-v3.spec --type git --method rpkg
+copr-cli add-package-scm binarytree/linux-power --name kernel-power-v3 \
+  --clone-url https://github.com/red-blakTree/zen-kernel-fedora \
+  --spec kernel-power-v3.spec --type git --method rpkg
+```

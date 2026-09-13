@@ -58,12 +58,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 同一仓库、同一上游版本，分别投给两个 Copr 工程（见 docs/build-plan.md 第 12 节）
+        # 同一仓库、同一上游版本，四个 spec 分别投给两个 Copr 工程（见 docs/build-plan.md 第 12/13 节）
         include:
           - project: binarytree/zen-kernel-fedora
             spec: kernel-zen.spec
+          - project: binarytree/zen-kernel-fedora
+            spec: kernel-zen-v3.spec
           - project: binarytree/linux-power
             spec: kernel-power.spec
+          - project: binarytree/linux-power
+            spec: kernel-power-v3.spec
     steps:
       - uses: actions/checkout@v5
         with:
