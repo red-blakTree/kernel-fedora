@@ -69,8 +69,8 @@ x86-64-v3 大致对应 Intel Haswell（2013）/ AMD Excavator（2015）及以后
 | 想要 | 内核参数 |
 | --- | --- |
 | 更流畅（游戏 / 视频会议） | `preempt=full` |
-| 默认（省电与流畅折中） | 不用加：`HZ=300` + `PREEMPT_LAZY` |
-| 更省电（外出 / 续航） | `preempt=none snd_hda_intel.power_save=1 pcie_aspm=powersave` |
+| 默认（省电与流畅折中） |  |
+| 更省电（外出 / 续航） | `preempt=none` |
 
 改 `/etc/default/grub` 的 `GRUB_CMDLINE_LINUX`，跑一次 `sudo grub2-mkconfig -o /boot/grub2/grub.cfg`
 重启即可，换场景不用换内核。
