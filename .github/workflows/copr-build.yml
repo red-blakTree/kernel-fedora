@@ -88,6 +88,14 @@ jobs:
           COPR_CLI_CONFIG: ${{ secrets.COPR_CLI_CONFIG }}
           COMMIT: ${{ needs.sync.outputs.sha }}
         run: |
+          if [ -z "${COPR_CLI_CONFIG}" ]; then
+            echo "::error::仓库 secret COPR_CLI_CONFIG 未配置或为空（Settings → Secrets and variables → Actions），其值应为 ~/.config/copr 的全文"
+            exit 1
+          fi
+          if ! printf '%s\n' "${COPR_CLI_CONFIG}" | grep -q '^[[:space:]]*\[copr-cli\]'; then
+            echo "::error::COPR_CLI_CONFIG 缺少 [copr-cli] 段，copr-cli 无法解析"
+            exit 1
+          fi
           uvx copr-cli --config <(echo "${COPR_CLI_CONFIG}") buildscm \
             --clone-url "https://github.com/${{ github.repository }}" \
             --commit "${COMMIT}" \
