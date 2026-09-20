@@ -77,6 +77,8 @@ Source0:        https://cdn.kernel.org/pub/linux/kernel/v%{_majver}.x/linux-%{_b
 Source1:        https://github.com/zen-kernel/zen-kernel/releases/download/%{_tag}/linux-%{_tag}.patch.zst
 # Source2: Arch Linux linux-zen 官方 config，%prep 中做 Fedora 适配
 Source2:        config
+# Patch1: 临时绕开 FORTIFY_SOURCE 在 ThinLTO 下的误报（原因与依据见补丁头）
+Patch1:         gud-tv-mode-no-memchr.patch
 
 BuildRequires:  bc
 BuildRequires:  bison
@@ -128,6 +130,10 @@ with clang as well.
 # zen 补丁以 .zst 压缩发布，rpmbuild 不会自动解压，这里显式解压后应用
 echo "Applying zen patch %{_tag}..."
 zstd -dc %{SOURCE1} | patch -p1
+
+# 7.2.6 的 drm/gud 校验用了 fortified memchr()，ThinLTO 下会误报 __read_overflow
+# 导致 ld.lld 链接失败（仅 LTO 包受影响）
+%patch -P 1 -p1
 
 cp %{SOURCE2} .config
 
