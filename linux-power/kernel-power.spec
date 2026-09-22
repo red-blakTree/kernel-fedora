@@ -22,8 +22,8 @@
 # 上游 tag 与 kernel-zen 相同：zen tag 形如 v7.2.4-zen2
 %global _majver      7
 %global _basekver    7.2
-%global _stablekver  6
-%global _zenrel      2
+%global _stablekver  7
+%global _zenrel      1
 
 %global _tag         v%{_basekver}.%{_stablekver}-zen%{_zenrel}
 %global _rpmver      %{version}-%{release}
