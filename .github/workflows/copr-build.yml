@@ -83,7 +83,8 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
-      - name: Trigger Copr build
+      - name: Submit Copr build
+        id: submit
         env:
           COPR_CLI_CONFIG: ${{ secrets.COPR_CLI_CONFIG }}
           COMMIT: ${{ needs.sync.outputs.sha }}
@@ -96,11 +97,70 @@ jobs:
             echo "::error::COPR_CLI_CONFIG 缺少 [copr-cli] 段，copr-cli 无法解析"
             exit 1
           fi
-          uvx copr-cli --config <(echo "${COPR_CLI_CONFIG}") buildscm \
+          out=$(uvx copr-cli --config <(echo "${COPR_CLI_CONFIG}") buildscm --nowait \
             --clone-url "https://github.com/${{ github.repository }}" \
             --commit "${COMMIT}" \
             --subdir "${{ matrix.subdir }}" \
             --spec "${{ matrix.spec }}" \
             --type git \
             --method rpkg \
-            "${{ matrix.project }}"
+            "${{ matrix.project }}")
+          printf '%s\n' "${out}"
+          # copr-cli 明确说明这段输出是给用户解析的：URL 行与 Created builds 行都带 build id
+          build_id=$(printf '%s\n' "${out}" \
+            | sed -n -e 's#.*/build/\([0-9]\+\)/\?$#\1#p' -e 's/^Created builds: *\([0-9]\+\)$/\1/p' \
+            | tail -n 1)
+          if [ -z "${build_id}" ]; then
+            echo "::error::未能从 copr-cli 输出解析 build id"
+            exit 1
+          fi
+          echo "build_id=${build_id}" >> "$GITHUB_OUTPUT"
+
+      - name: Save build id
+        run: echo "${{ steps.submit.outputs.build_id }}" > build-id.txt
+
+      - name: Upload build id
+        uses: actions/upload-artifact@v4
+        with:
+          name: copr-build-id-${{ matrix.spec }}
+          path: build-id.txt
+
+  watch:
+    needs: [sync, build]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 必须与 build job 的 matrix 保持一致：artifact 名以 spec 为 key
+        include:
+          - project: binarytree/linux-zen-fedora
+            subdir: linux-zen-fedora
+            spec: kernel-zen.spec
+          - project: binarytree/linux-zen-fedora
+            subdir: linux-zen-fedora
+            spec: kernel-zen-v3.spec
+          - project: binarytree/linux-power
+            subdir: linux-power
+            spec: kernel-power.spec
+          - project: binarytree/linux-power
+            subdir: linux-power
+            spec: kernel-power-v3.spec
+          - project: binarytree/linux-power-lto
+            subdir: linux-power-lto
+            spec: kernel-power-lto.spec
+    steps:
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+
+      - name: Download build id
+        uses: actions/download-artifact@v4
+        with:
+          name: copr-build-id-${{ matrix.spec }}
+
+      - name: Watch Copr build
+        env:
+          COPR_CLI_CONFIG: ${{ secrets.COPR_CLI_CONFIG }}
+        run: |
+          build_id=$(cat build-id.txt)
+          echo "Watching Copr build ${build_id} (${{ matrix.project }} / ${{ matrix.spec }})"
+          uvx copr-cli --config <(echo "${COPR_CLI_CONFIG}") watch-build "${build_id}"
