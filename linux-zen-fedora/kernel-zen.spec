@@ -22,7 +22,7 @@
 # zen tag 形如 v7.2.4-zen2（lqx 系列是 -lqxN，本 spec 不处理）
 %global _majver      7
 %global _basekver    7.2
-%global _stablekver  8
+%global _stablekver  9
 %global _zenrel      1
 
 %global _tag         v%{_basekver}.%{_stablekver}-zen%{_zenrel}
