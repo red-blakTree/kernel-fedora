@@ -8,11 +8,11 @@
 
 | 包 | Copr 工程 | `uname -r` | chroot | 特点 |
 | --- | --- | --- | --- | --- |
-| `kernel-zen` | `binarytree/linux-zen-fedora` | `7.2.4-zen2.fc44.x86_64` | fedora-44 + rawhide | 基线 |
-| `kernel-zen-v3` | `binarytree/linux-zen-fedora` | `7.2.4-zen2.v3.fc44.x86_64` | fedora-44 + rawhide | + x86-64-v3 |
-| `kernel-power` | `binarytree/linux-power` | `7.2.4-power2.fc44.x86_64` | fedora-44 + rawhide | 省电档 |
-| `kernel-power-v3` | `binarytree/linux-power` | `7.2.4-power2.v3.fc44.x86_64` | fedora-44 + rawhide | 省电 + v3 |
-| `kernel-power-lto` | `binarytree/linux-power-lto` | `7.2.4-power2.lto.fc44.x86_64` | fedora-44 | 省电 + v3 + ThinLTO |
+| `kernel-zen` | `binarytree/linux-zen-fedora` | `7.2.4-zen2.fc44.x86_64` | fedora-44/45 + rawhide | 基线 |
+| `kernel-zen-v3` | `binarytree/linux-zen-fedora` | `7.2.4-zen2.v3.fc44.x86_64` | fedora-44/45 + rawhide | + x86-64-v3 |
+| `kernel-power` | `binarytree/linux-power` | `7.2.4-power2.fc44.x86_64` | fedora-44/45 + rawhide | 省电档 |
+| `kernel-power-v3` | `binarytree/linux-power` | `7.2.4-power2.v3.fc44.x86_64` | fedora-44/45 + rawhide | 省电 + v3 |
+| `kernel-power-lto` | `binarytree/linux-power-lto` | `7.2.4-power2.lto.fc44.x86_64` | fedora-44/45 | 省电 + v3 + ThinLTO |
 
 每个包都产 `-core` / `-modules` / `-devel` / `-devel-matched` 子包。
 
@@ -35,7 +35,7 @@ Release:        zen%{_zenrel}%{?dist}                        # zen2.fc44
 
 - `%build` 用 `make EXTRAVERSION=-%{release}.%{_arch}` 覆盖 zen 补丁在 `Makefile` 里设的 `EXTRAVERSION=-zen2`，因此 `uname -r` 与 `_kver` 严格相等。
 - **不需要构建计数器**：上游 tag 变了，`Version`（内核升版）或 `Release`（zen 序号）必然变，NEVRA 天然唯一。
-- 5 个 `_kver` 互不相同 ⇒ `/lib/modules/<kver>`、`/boot/vmlinuz-<kver>`、`kernel-*-uname-r` provide 都不冲突，可以同时安装；代价是 `/boot` 占用与构建量。`%{?dist}` 让 fc44 与 rawhide 的 `_kver` 也不同，两个 chroot 的产物不会互相覆盖。
+- 5 个 `_kver` 互不相同 ⇒ `/lib/modules/<kver>`、`/boot/vmlinuz-<kver>`、`kernel-*-uname-r` provide 都不冲突，可以同时安装；代价是 `/boot` 占用与构建量。`%{?dist}` 让 fc44 / fc45 / rawhide 的 `_kver` 也不同，三个 chroot 的产物不会互相覆盖。
 
 ## 4. spec 要点
 
@@ -76,7 +76,7 @@ Release:        zen%{_zenrel}%{?dist}                        # zen2.fc44
 
 ### 4.4 Rust
 
-Arch config 是 `CONFIG_RUST=y`；内核 `scripts/min-tool-version.sh` 要求 rustc ≥ 1.85.0、bindgen ≥ 0.71.1，而 Fedora 44 / rawhide 给的是 rustc 1.98.1 / bindgen 0.72.1，都满足，因此 **`_build_rust 1`（开启）**，BuildRequires 用 Fedora kernel.spec 的同款写法（`rust` / `rust-src` / `bindgen`）。改回 0 即关，`%prep` 会自动 `scripts/config -d RUST`。
+Arch config 是 `CONFIG_RUST=y`；内核 `scripts/min-tool-version.sh` 要求 rustc ≥ 1.85.0、bindgen ≥ 0.71.1，而 Fedora 44/45 与 rawhide 给的是 rustc 1.98.1 / bindgen 0.72.1，都满足，因此 **`_build_rust 1`（开启）**，BuildRequires 用 Fedora kernel.spec 的同款写法（`rust` / `rust-src` / `bindgen`）。改回 0 即关，`%prep` 会自动 `scripts/config -d RUST`。
 
 ## 5. 变体实现
 
@@ -135,9 +135,9 @@ Arch config 是 `CONFIG_RUST=y`；内核 `scripts/min-tool-version.sh` 要求 ru
 
 | 工程 | chroot | package |
 | --- | --- | --- |
-| `binarytree/linux-zen-fedora` | fedora-44 + rawhide | kernel-zen、kernel-zen-v3 |
-| `binarytree/linux-power` | fedora-44 + rawhide | kernel-power、kernel-power-v3 |
-| `binarytree/linux-power-lto` | fedora-44 | kernel-power-lto |
+| `binarytree/linux-zen-fedora` | fedora-44/45 + rawhide | kernel-zen、kernel-zen-v3 |
+| `binarytree/linux-power` | fedora-44/45 + rawhide | kernel-power、kernel-power-v3 |
+| `binarytree/linux-power-lto` | fedora-44/45 | kernel-power-lto |
 
 公共设置：`enable_net=on`（kernel.org tarball 在 rpkg 生成 SRPM 阶段下载）、`follow_fedora_branching=off`、`module_hotfixes=off`、`multilib=off`、`appstream=off`、`auto_prune=on`。
 
@@ -164,7 +164,7 @@ Arch config 是 `CONFIG_RUST=y`；内核 `scripts/min-tool-version.sh` 要求 ru
 
 **构建期**：`%prep` 的 `diff -u config .config` 显示 zen 补丁干净应用（0 fuzz）、变体改动确实出现、Fedora 适配就位；LTO 构建能看到 `CONFIG_LTO_NONE=y` → `CONFIG_LTO_CLANG_THIN=y`；v3 构建日志里出现 spec 主动 echo 的 `Building with KCFLAGS=-march=x86-64-v3`；`%build` 不 OOM、不逼近 5 小时。
 
-**装机后**：`uname -r` 等于对应 `_kver`（本仓库当前是 `7.2.4-{zen2,zen2.v3,power2,power2.v3,power2.lto}.fc44.x86_64`）；`journalctl -k | head` 无模块签名/依赖类错误；LTO 包的 `/lib/modules/<kver>/config` 里有 `CONFIG_LTO_CLANG_THIN=y` 与 `CONFIG_LTO_CLANG=y` 且 `CONFIG_LTO_NONE` 消失（这是 LTO 唯一可直接查证的证据）；akmods/dkms 能对着对应的 `-devel-matched` 编出模块。
+**装机后**：`uname -r` 等于对应 `_kver`（fedora-44 构建是 `7.2.4-{zen2,zen2.v3,power2,power2.v3,power2.lto}.fc44.x86_64`，fedora-45 构建对应 `.fc45.x86_64`）；`journalctl -k | head` 无模块签名/依赖类错误；LTO 包的 `/lib/modules/<kver>/config` 里有 `CONFIG_LTO_CLANG_THIN=y` 与 `CONFIG_LTO_CLANG=y` 且 `CONFIG_LTO_NONE` 消失（这是 LTO 唯一可直接查证的证据）；akmods/dkms 能对着对应的 `-devel-matched` 编出模块。
 
 **指令级（只对 v3 包）**：
 
@@ -182,7 +182,7 @@ objdump -d /lib/modules/$(uname -r)/kernel/fs/xfs/xfs.ko | grep -cE '\b(popcnt|a
 | 10.2 | 工具链不满足内核要求（pahole/BTF、rustc、clang） | 升级 chroot；或临时关 `DEBUG_INFO_BTF`（并去掉 `bpftool vmlinux.h` 那步）/ `_build_rust 0` |
 | 10.3 | 上游改 tag 或资产命名、只发 lqx | 同步脚本报错退出，不会静默用旧版本 |
 | 10.4 | `DEBUG_INFO=y` 让构建逼近 5 小时或撑爆磁盘 | 看实测耗时；必要时关调试信息，或降低并行度换内存 |
-| 10.5 | ThinLTO 链接很重、构建更慢 | LTO 工程目前只开 fedora-44 一个 chroot |
+| 10.5 | ThinLTO 链接很重、构建更慢 | LTO 工程现开 fedora-44 + fedora-45 两个 chroot，构建更慢；必要时只保留一个 |
 | 10.6 | Rust + LTO（rustc 与 clang 的 LLVM 版本不一致） | 内核 `rust/Makefile` 有 `ifdef CONFIG_LTO` 专门处理；真失败就 `_build_rust 0` 重试 |
 | 10.7 | 老 CPU 上 v3 内核无法启动 | 包名与 `uname -r` 都带 `v3`，grub 里保留 baseline 内核可切回 |
 | 10.8 | 安装时未签名（缺密钥 / `sbsign` / MOK 未注册） | `%posttrans` 打印 `NOTE:`；按第 7 节补签 + `mokutil --import` |

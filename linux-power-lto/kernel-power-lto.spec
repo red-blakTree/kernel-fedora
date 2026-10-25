@@ -52,7 +52,7 @@
 %global _kcflags     -march=x86-64-v%{_x86_64_lvl}
 
 # Rust for Linux：内核 scripts/min-tool-version.sh 要求 rustc >= 1.85.0、bindgen >= 0.71.1；
-# Fedora 44 与 rawhide 提供 rustc 1.98.1 / bindgen 0.72.1，已满足，因此默认开启。
+# Fedora 44/45 与 rawhide 提供 rustc 1.98.1 / bindgen 0.72.1，已满足，因此默认开启。
 # 关闭时把这行改成 0（%prep 会 scripts/config -d RUST）。
 %global _build_rust  1
 

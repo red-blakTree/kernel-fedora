@@ -110,10 +110,10 @@ mock -r fedora-44-x86_64 --rebuild ./kernel-zen-*.src.rpm
 
 ## 已知限制
 
-- chroot：`linux-zen-fedora` 与 `linux-power` 是 `fedora-44-x86_64` + `fedora-rawhide-x86_64`，
-  `linux-power-lto` 目前只有 `fedora-44-x86_64`；架构只有 x86_64。
+- chroot：`linux-zen-fedora` 与 `linux-power` 是 `fedora-44-x86_64` + `fedora-45-x86_64` +
+  `fedora-rawhide-x86_64`，`linux-power-lto` 是 `fedora-44-x86_64` + `fedora-45-x86_64`；架构只有 x86_64。
 - 不产出 `kernel-headers`：Fedora 官方 `kernel-headers` 已占用 `/usr/include/linux`、`/usr/include/asm`
   等路径，再出一份会文件冲突；外部模块用 `-devel` 就够。同样不产出 `kernel-debuginfo`。
 - Rust for Linux 默认开启（`%global _build_rust 1`）：内核要求 rustc ≥ 1.85.0、bindgen ≥ 0.71.1，
-  Fedora 44 与 rawhide 提供 rustc 1.98.1 / bindgen 0.72.1。
+  Fedora 44/45 与 rawhide 提供 rustc 1.98.1 / bindgen 0.72.1。
 - v3 / lto 变体对 CPU 有要求（见上）；lto 包的外部模块必须用 clang。
