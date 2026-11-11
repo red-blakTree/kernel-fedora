@@ -24,8 +24,8 @@
 # ---- 版本 ------------------------------------------------------------------
 # 上游 tag 与 kernel-zen 相同：zen tag 形如 v7.2.4-zen2
 %global _majver      7
-%global _basekver    7.2
-%global _stablekver  15
+%global _basekver    7.3
+%global _stablekver  4
 %global _zenrel      1
 
 # x86-64 微架构级别：3 = x86-64-v3（Intel Haswell 2013 / AMD Excavator 2015 及以后）。
