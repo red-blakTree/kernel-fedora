@@ -26,7 +26,7 @@
 %global _majver      7
 %global _basekver    7.3
 %global _stablekver  4
-%global _zenrel      1
+%global _zenrel      2
 
 %global _tag         v%{_basekver}.%{_stablekver}-zen%{_zenrel}
 %global _rpmver      %{version}-%{release}

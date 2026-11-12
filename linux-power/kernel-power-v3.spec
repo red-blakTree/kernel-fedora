@@ -26,7 +26,7 @@
 %global _majver      7
 %global _basekver    7.3
 %global _stablekver  4
-%global _zenrel      1
+%global _zenrel      2
 
 # x86-64 微架构级别：3 = x86-64-v3（Intel Haswell 2013 / AMD Excavator 2015 及以后）。
 # 走 KCFLAGS 而不是 scripts/config：zen-kernel 源码里**没有** CONFIG_X86_64_VERSION 这个
